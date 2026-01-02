@@ -8,13 +8,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 
 public class I18n {
     private final JavaPlugin plugin;
     private YamlConfiguration langConfig;
-    private final Map<String, String> cache = new HashMap<>();
+    private final Map<String, String> cache = new ConcurrentHashMap<>();
 
     public I18n(JavaPlugin plugin) {
         this.plugin = plugin;

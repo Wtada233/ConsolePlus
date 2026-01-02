@@ -1,5 +1,6 @@
 package org.linuxfirmware.consolePlus;
 
+import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
@@ -31,16 +32,16 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.apache.commons.exec.CommandLine;
 
 public class ShellCommand implements CommandExecutor, TabCompleter {
-
-    private static final Map<Integer, String> ANSI_TO_MC = new HashMap<>();
-    static {
-        ANSI_TO_MC.put(0, "§r"); ANSI_TO_MC.put(1, "§l");
-        ANSI_TO_MC.put(30, "§0"); ANSI_TO_MC.put(31, "§c"); ANSI_TO_MC.put(32, "§a"); ANSI_TO_MC.put(33, "§e");
-        ANSI_TO_MC.put(34, "§9"); ANSI_TO_MC.put(35, "§5"); ANSI_TO_MC.put(36, "§b"); ANSI_TO_MC.put(37, "§7");
-        ANSI_TO_MC.put(90, "§8"); ANSI_TO_MC.put(91, "§c"); ANSI_TO_MC.put(92, "§a"); ANSI_TO_MC.put(93, "§e");
-        ANSI_TO_MC.put(94, "§9"); ANSI_TO_MC.put(95, "§d"); ANSI_TO_MC.put(96, "§b"); ANSI_TO_MC.put(97, "§f");
-    }
-
+    private static final Map<Integer, String> ANSI_TO_MC = Map.ofEntries(
+        Map.entry(0, "§r"), Map.entry(1, "§l"),
+        Map.entry(30, "§0"), Map.entry(31, "§c"), Map.entry(32, "§a"), Map.entry(33, "§e"),
+        Map.entry(34, "§9"), Map.entry(35, "§5"), Map.entry(36, "§b"), Map.entry(37, "§7"),
+        Map.entry(90, "§8"), Map.entry(91, "§c"), Map.entry(92, "§a"), Map.entry(93, "§e"),
+        Map.entry(94, "§9"), Map.entry(95, "§d"), Map.entry(96, "§b"), Map.entry(97, "§f")
+    );
+    private static final java.util.Set<String> SHELL_OPERATORS = java.util.Set.of(
+        ">", ">>", "<", "<<", "|", "||", "&&", ";", "&", "1>", "2>", "2>&1", ">&", "!"
+    );
     private final ConsolePlus plugin;
     private final Map<Integer, ManagedProcess> activeProcesses = new ConcurrentHashMap<>();
     private final Map<String, List<String>> environments = new ConcurrentHashMap<>();
@@ -300,10 +301,6 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         return true;
     }
 
-    private static final java.util.Set<String> SHELL_OPERATORS = new java.util.HashSet<>(java.util.Arrays.asList(
-        ">", ">>", "<", "<<", "|", "||", "&&", ";", "&", "1>", "2>", "2>&1", ">&", "!"
-    ));
-
     private void handleRun(CommandSender sender, String[] args) {
         if (args.length < 2) {
             sender.sendMessage(msg("error-prefix") + "Usage: /shell run [-d dir] [-e env] [-t timeout] <command>");
@@ -496,13 +493,16 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         return msg("process-stats", "mem", rssDisplay, "cpu", cpuDisplay);
     }
 
+    private Charset getNativeCharset() {
+        String enc = System.getProperty("sun.stdout.encoding") != null ? System.getProperty("sun.stdout.encoding") : System.getProperty("native.encoding");
+        return (enc != null) ? Charset.forName(enc) : Charset.defaultCharset();
+    }
+
     private long getRssKb(long pid) {
         if (isWindows) {
             try {
                 Process p = new ProcessBuilder("tasklist", "/FI", "PID eq " + pid, "/NH", "/FO", "CSV").start();
-                String nativeEncoding = System.getProperty("sun.stdout.encoding") != null ? System.getProperty("sun.stdout.encoding") : System.getProperty("native.encoding");
-                Charset charset = (nativeEncoding != null) ? Charset.forName(nativeEncoding) : Charset.defaultCharset();
-                try (java.util.Scanner s = new java.util.Scanner(p.getInputStream(), charset)) {
+                try (java.util.Scanner s = new java.util.Scanner(p.getInputStream(), getNativeCharset())) {
                     if (s.hasNextLine()) {
                         String line = s.nextLine();
                         if (line.contains(",")) {
@@ -559,8 +559,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
             } catch (IOException e) { plugin.getLogger().warning("Could not create log file for process " + id + ": " + e.getMessage()); }
         }
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
-            String nativeEncoding = System.getProperty("sun.stdout.encoding") != null ? System.getProperty("sun.stdout.encoding") : System.getProperty("native.encoding");
-            Charset charset = (nativeEncoding != null) ? Charset.forName(nativeEncoding) : Charset.defaultCharset();
+            Charset charset = getNativeCharset();
             ProcessBuilder pb = new ProcessBuilder();
             if (workDir != null) {
                 File dir = new File(workDir);
@@ -669,7 +668,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         ManagedProcess mp = activeProcesses.get(id);
         if (mp != null && mp.logWriter != null) {
             try {
-                String plain = message.replaceAll("(?i)§[0-9A-FK-ORX]", "").replaceAll("(?i)§[0-9A-F]", "");
+                String plain = ChatColor.stripColor(message);
                 mp.logWriter.write("[" + new java.text.SimpleDateFormat("HH:mm:ss").format(new java.util.Date()) + "] " + plain + "\n");
                 mp.logWriter.flush();
             } catch (IOException ignored) {}
