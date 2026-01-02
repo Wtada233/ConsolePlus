@@ -33,11 +33,13 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
     private final Map<Integer, ManagedProcess> activeProcesses = new ConcurrentHashMap<>();
     private final Map<String, List<String>> environments = new HashMap<>();
     private final File envFile;
+    private final boolean isWindows;
     private String selectedEnv = "default";
 
     public ShellCommand(ConsolePlus plugin) {
         this.plugin = plugin;
         this.envFile = new File(plugin.getDataFolder(), "environments.yml");
+        this.isWindows = System.getProperty("os.name").toLowerCase().startsWith("windows");
         loadEnvironments();
     }
 
@@ -389,16 +391,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         long totalCpuNanos = 0;
 
         for (ProcessHandle h : tree) {
-            long pid = h.pid();
-            try {
-                List<String> lines = java.nio.file.Files.readAllLines(java.nio.file.Paths.get("/proc/" + pid + "/status"));
-                for (String line : lines) {
-                    if (line.startsWith("VmRSS:")) {
-                        totalRssKb += Long.parseLong(line.split(":")[1].trim().split(" ")[0]);
-                        break;
-                    }
-                }
-            } catch (Exception ignored) {}
+            totalRssKb += getRssKb(h.pid());
             totalCpuNanos += h.info().totalCpuDuration().map(java.time.Duration::toNanos).orElse(0L);
         }
 
@@ -417,6 +410,46 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         String cpuDisplay = String.format("%.1f%%", Math.min(100.0 * Runtime.getRuntime().availableProcessors(), mp.lastUsage));
         
         return msg("process-stats", "mem", rssDisplay, "cpu", cpuDisplay);
+    }
+
+    private long getRssKb(long pid) {
+        if (isWindows) {
+            try {
+                Process p = new ProcessBuilder("tasklist", "/FI", "PID eq " + pid, "/NH", "/FO", "CSV").start();
+                try (java.util.Scanner s = new java.util.Scanner(p.getInputStream())) {
+                    if (s.hasNextLine()) {
+                        String line = s.nextLine();
+                        if (line.contains(",")) {
+                            String[] parts = line.replace("\"", "").split(",");
+                            if (parts.length >= 5) {
+                                String memStr = parts[4].replaceAll("[^0-9]", "");
+                                return Long.parseLong(memStr);
+                            }
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+        } else {
+            File procStatus = new File("/proc/" + pid + "/status");
+            if (procStatus.exists()) {
+                try {
+                    List<String> lines = java.nio.file.Files.readAllLines(procStatus.toPath());
+                    for (String line : lines) {
+                        if (line.startsWith("VmRSS:")) {
+                            return Long.parseLong(line.split(":")[1].trim().split(" ")[0]);
+                        }
+                    }
+                } catch (Exception ignored) {}
+            } else {
+                try {
+                    Process p = new ProcessBuilder("ps", "-o", "rss=", "-p", String.valueOf(pid)).start();
+                    try (java.util.Scanner s = new java.util.Scanner(p.getInputStream())) {
+                        if (s.hasNextLong()) return s.nextLong();
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+        return 0;
     }
 
     private void stopProcess(CommandSender sender, int id) {
@@ -440,7 +473,6 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         activeProcesses.put(id, mp);
 
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
-            boolean isWindows = System.getProperty("os.name").toLowerCase().startsWith("windows");
             String nativeEncoding = System.getProperty("sun.stdout.encoding");
             if (nativeEncoding == null) nativeEncoding = System.getProperty("native.encoding");
             Charset charset = (nativeEncoding != null) ? Charset.forName(nativeEncoding) : Charset.defaultCharset();
