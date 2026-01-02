@@ -22,6 +22,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -41,7 +42,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
 
     private final ConsolePlus plugin;
     private final Map<Integer, ManagedProcess> activeProcesses = new ConcurrentHashMap<>();
-    private final Map<String, List<String>> environments = new HashMap<>();
+    private final Map<String, List<String>> environments = new ConcurrentHashMap<>();
     private final File envFile;
     private final boolean isWindows;
     private String selectedEnv = "default";
@@ -111,12 +112,12 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
     }
 
     private void loadEnvironments() {
-        environments.put("default", new ArrayList<>());
+        environments.put("default", new CopyOnWriteArrayList<>());
         if (!envFile.exists()) return;
         YamlConfiguration config = YamlConfiguration.loadConfiguration(envFile);
         for (String key : config.getKeys(false)) {
             if (!key.equalsIgnoreCase("default")) {
-                environments.put(key, config.getStringList(key));
+                environments.put(key, new CopyOnWriteArrayList<>(config.getStringList(key)));
             }
         }
     }
@@ -447,7 +448,11 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         if (isWindows) {
             try {
                 Process p = new ProcessBuilder("tasklist", "/FI", "PID eq " + pid, "/NH", "/FO", "CSV").start();
-                try (java.util.Scanner s = new java.util.Scanner(p.getInputStream())) {
+                String nativeEncoding = System.getProperty("sun.stdout.encoding");
+                if (nativeEncoding == null) nativeEncoding = System.getProperty("native.encoding");
+                Charset charset = (nativeEncoding != null) ? Charset.forName(nativeEncoding) : Charset.defaultCharset();
+                
+                try (java.util.Scanner s = new java.util.Scanner(p.getInputStream(), charset)) {
                     if (s.hasNextLine()) {
                         String line = s.nextLine();
                         if (line.contains(",")) {
@@ -636,34 +641,80 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                     }
                 }
 
-                int exitCode = process.waitFor();
-                if (activeProcesses.containsKey(id)) {
-                    sender.sendMessage(msg("warn-prefix") + msg("process-exited", "id", id, "code", exitCode));
-                    activeProcesses.remove(id);
-                }
-            } catch (Exception e) {
-                if (activeProcesses.containsKey(id)) {
-                    sender.sendMessage(msg("error-prefix") + msg("process-error", "id", id, "error", e.getMessage()));
-                    activeProcesses.remove(id);
-                }
-            }
-        });
-    }
+                                int exitCode = process.waitFor();
 
-    private void sendFormattedMessage(ConsoleCommandSender sender, String prefixColor, int id, String message) {
-        if (message.isEmpty()) return;
-        sender.sendMessage(prefixColor + "[" + id + "]§r " + message);
-    }
+                                if (activeProcesses.containsKey(id)) {
 
-    public void cleanup() {
-        if (!activeProcesses.isEmpty()) {
-            plugin.getLogger().info("Stopping " + activeProcesses.size() + " active shell processes...");
-            activeProcesses.forEach((id, mp) -> {
-                if (mp.process != null) {
-                    mp.process.destroyForcibly();
+                                    sender.sendMessage(msg("warn-prefix") + msg("process-exited", "id", id, "code", exitCode));
+
+                                    activeProcesses.remove(id);
+
+                                }
+
+                            } catch (Exception e) {
+
+                                if (activeProcesses.containsKey(id)) {
+
+                                    sender.sendMessage(msg("error-prefix") + msg("process-error", "id", id, "error", e.getMessage()));
+
+                                    activeProcesses.remove(id);
+
+                                }
+
+                            } finally {
+
+                                if (mp.writer != null) {
+
+                                    try { mp.writer.close(); } catch (IOException ignored) {}
+
+                                }
+
+                            }
+
+                        });
+
+                    }
+
+                
+
+                    private void sendFormattedMessage(ConsoleCommandSender sender, String prefixColor, int id, String message) {
+
+                        if (message.isEmpty()) return;
+
+                        sender.sendMessage(prefixColor + "[" + id + "]§r " + message);
+
+                    }
+
+                
+
+                    public void cleanup() {
+
+                        if (!activeProcesses.isEmpty()) {
+
+                            plugin.getLogger().info("Stopping " + activeProcesses.size() + " active shell processes...");
+
+                            activeProcesses.forEach((id, mp) -> {
+
+                                if (mp.process != null) {
+
+                                    mp.process.destroyForcibly();
+
+                                }
+
+                                if (mp.writer != null) {
+
+                                    try { mp.writer.close(); } catch (IOException ignored) {}
+
+                                }
+
+                            });
+
+                            activeProcesses.clear();
+
+                        }
+
+                    }
+
                 }
-            });
-            activeProcesses.clear();
-        }
-    }
-}
+
+                

@@ -39,7 +39,13 @@ public class I18n {
         String langName = plugin.getConfig().getString("language", "zh_CN");
         File currentLangFile = new File(langDir, langName + ".yml");
         
-        langConfig = YamlConfiguration.loadConfiguration(currentLangFile);
+        try (java.io.FileInputStream fis = new java.io.FileInputStream(currentLangFile);
+             java.io.InputStreamReader reader = new java.io.InputStreamReader(fis, StandardCharsets.UTF_8)) {
+            langConfig = YamlConfiguration.loadConfiguration(reader);
+        } catch (IOException e) {
+            plugin.getLogger().severe("Could not load language file: " + currentLangFile.getName());
+            langConfig = new YamlConfiguration();
+        }
         
         // Load default values from JAR if missing in file
         InputStream defStream = plugin.getResource("languages/" + langName + ".yml");
