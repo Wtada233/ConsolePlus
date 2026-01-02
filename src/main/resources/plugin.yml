@@ -5,4 +5,4 @@ api-version: '1.21'
 commands:
   shell:
     description: Manage and execute system commands.
-    usage: /shell <run|list|stop|help> [args]
+    usage: /shell <run|input|list|stop|env|help> [args]

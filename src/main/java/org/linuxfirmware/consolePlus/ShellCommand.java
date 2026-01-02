@@ -14,7 +14,12 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStreamWriter;
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
 import java.nio.charset.Charset;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CoderResult;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -563,6 +568,16 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
 
     private void executeAsync(String cmd, ConsoleCommandSender sender, String workDir, String envName, Integer customTimeout) {
         int id = getNextId();
+        
+        // Validate working directory before reserving ID fully
+        if (workDir != null) {
+            File dir = new File(workDir);
+            if (!dir.exists() || !dir.isDirectory()) {
+                sender.sendMessage(msg("error-prefix") + msg("process-error", "id", id, "error", "Invalid working directory: " + workDir));
+                return;
+            }
+        }
+
         sender.sendMessage(msg("prefix") + msg("process-starting", "id", id));
         ManagedProcess mp = new ManagedProcess(null, cmd, Charset.defaultCharset());
         activeProcesses.put(id, mp);
@@ -607,6 +622,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
             int bufferSize = plugin.getConfig().getInt("read-buffer-size", 8192);
             int timeout = (customTimeout != null) ? customTimeout : plugin.getConfig().getInt("default-timeout", 0);
             String idPrefix = plugin.getConfig().getString("id-prefix-color", "§8");
+            
             try {
                 Process process = pb.start();
                 mp.updateProcess(process, charset);
@@ -619,16 +635,23 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                         }
                     }, timeout * 20L);
                 }
+
+                // New decoding logic using CharsetDecoder and ByteBuffer
+                CharsetDecoder decoder = charset.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPLACE)
+                    .onUnmappableCharacter(CodingErrorAction.REPLACE);
+                ByteBuffer dataBuffer = ByteBuffer.allocate(maxLineLength + bufferSize);
+
                 try (InputStream is = process.getInputStream()) {
-                    byte[] buffer = new byte[bufferSize];
+                    byte[] rawBuffer = new byte[bufferSize];
                     int bytesRead;
-                    java.io.ByteArrayOutputStream lineBuffer = new java.io.ByteArrayOutputStream();
                     int ansiState = 0;
                     StringBuilder ansiCode = new StringBuilder();
                     boolean colorEnabled = plugin.getConfig().getBoolean("enable-color", true);
-                    while ((bytesRead = is.read(buffer)) != -1) {
+                    
+                    while ((bytesRead = is.read(rawBuffer)) != -1) {
                         for (int k = 0; k < bytesRead; k++) {
-                            int ub = buffer[k] & 0xFF;
+                            int ub = rawBuffer[k] & 0xFF;
                             if (ansiState == 0) {
                                 if (ub == 27) { ansiState = 1; continue; }
                             } else if (ansiState == 1) {
@@ -642,7 +665,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                                         for (String code : ansiCode.toString().split(";")) {
                                             try {
                                                 String mc = ANSI_TO_MC.get(Integer.parseInt(code));
-                                                if (mc != null) lineBuffer.write(mc.getBytes(charset));
+                                                if (mc != null) dataBuffer.put(mc.getBytes(charset));
                                             } catch (NumberFormatException ignored) {}
                                         }
                                     }
@@ -650,20 +673,26 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                                 }
                                 ansiState = 0; continue;
                             } else if (ansiState == 3) { ansiState = 0; continue; }
+                            
+                            // Handle Newlines
                             if (ub == 10 || ub == 13) {
-                                if (lineBuffer.size() > 0) { sendFormattedMessage(sender, idPrefix, id, lineBuffer.toString(charset)); lineBuffer.reset(); }
+                                flushBuffer(dataBuffer, decoder, sender, idPrefix, id);
                                 continue;
                             }
-                            if (ub < 32 && ub != 9) continue;
-                            lineBuffer.write(ub);
-                            if (lineBuffer.size() > maxLineLength) {
-                                sendFormattedMessage(sender, idPrefix, id, lineBuffer.toString(charset) + " §7(truncated...)");
-                                lineBuffer.reset();
+                            
+                            if (ub < 32 && ub != 9) continue; // Skip other control chars
+                            
+                            dataBuffer.put((byte) ub);
+                            
+                            if (dataBuffer.position() > maxLineLength) {
+                                flushBuffer(dataBuffer, decoder, sender, idPrefix, id);
+                                sender.sendMessage(idPrefix + "[" + id + "]§r §7(line truncated...)");
                             }
                         }
-                        if (lineBuffer.size() > 0 && is.available() == 0) {
-                            sendFormattedMessage(sender, idPrefix, id, lineBuffer.toString(charset));
-                            lineBuffer.reset();
+                        
+                        // Flush if stream paused (e.g. prompts)
+                        if (is.available() == 0 && dataBuffer.position() > 0) {
+                            flushBuffer(dataBuffer, decoder, sender, idPrefix, id);
                         }
                     }
                 }
@@ -687,6 +716,22 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                 }
             }
         });
+    }
+
+    private void flushBuffer(ByteBuffer buffer, CharsetDecoder decoder, ConsoleCommandSender sender, String idPrefix, int id) {
+        buffer.flip();
+        if (buffer.hasRemaining()) {
+            CharBuffer chars = CharBuffer.allocate(buffer.remaining());
+            decoder.decode(buffer, chars, false);
+            chars.flip();
+            String line = chars.toString();
+            if (!line.isEmpty()) {
+                sendFormattedMessage(sender, idPrefix, id, line);
+            }
+            buffer.compact();
+        } else {
+            buffer.clear();
+        }
     }
 
     private void sendFormattedMessage(ConsoleCommandSender sender, String prefixColor, int id, String message) {
