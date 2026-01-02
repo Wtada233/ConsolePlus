@@ -26,6 +26,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.apache.commons.exec.CommandLine;
 
 public class ShellCommand implements CommandExecutor, TabCompleter {
 
@@ -205,6 +206,10 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         return true;
     }
 
+    private static final java.util.Set<String> SHELL_OPERATORS = new java.util.HashSet<>(java.util.Arrays.asList(
+        ">", ">>", "<", "<<", "|", "||", "&&", ";", "&", "1>", "2>", "2>&1", ">&", "!"
+    ));
+
     private void handleRun(CommandSender sender, String[] args) {
         if (args.length < 2) {
             sender.sendMessage(msg("error-prefix") + "Usage: /shell run [-d dir] [-e env] [-t timeout] <command>");
@@ -245,9 +250,26 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         }
         if (envName == null) envName = "default";
 
-        String[] cmdArgs = new String[args.length - i];
-        System.arraycopy(args, i, cmdArgs, 0, args.length - i);
-        String fullCommand = String.join(" ", cmdArgs);
+        StringBuilder cmdBuilder = new StringBuilder();
+        for (int j = i; j < args.length; j++) {
+            String arg = args[j];
+            if (SHELL_OPERATORS.contains(arg)) {
+                cmdBuilder.append(arg);
+            } else {
+                // Use CommandLine to get a safely escaped/quoted argument for the current platform
+                CommandLine cl = new CommandLine("fake");
+                cl.addArgument(arg, true);
+                String[] strings = cl.toStrings();
+                if (strings.length > 1) {
+                    cmdBuilder.append(strings[1]);
+                } else if (arg.isEmpty()) {
+                    cmdBuilder.append("\"\"");
+                }
+            }
+            if (j < args.length - 1) cmdBuilder.append(" ");
+        }
+        
+        String fullCommand = cmdBuilder.toString();
         executeAsync(fullCommand, (ConsoleCommandSender) sender, workDir, envName, customTimeout);
     }
 
