@@ -49,6 +49,8 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
     private final File envFile;
     private final boolean isWindows;
     private String selectedEnv = "default";
+    private final Map<Long, Long> windowsStatsCache = new HashMap<>();
+    private long lastStatsUpdate = 0;
 
     public ShellCommand(ConsolePlus plugin) {
         this.plugin = plugin;
@@ -74,8 +76,11 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                     for (File f : files) {
                         if (f.isFile() && (isWindows || f.canExecute())) {
                             String name = f.getName();
-                            if (isWindows && name.toLowerCase().endsWith(".exe")) {
-                                systemCommands.add(name.substring(0, name.length() - 4));
+                            String lower = name.toLowerCase();
+                            if (isWindows) {
+                                if (lower.endsWith(".exe") || lower.endsWith(".bat") || lower.endsWith(".cmd")) {
+                                    systemCommands.add(name.substring(0, name.lastIndexOf('.')));
+                                }
                             } else {
                                 systemCommands.add(name);
                             }
@@ -500,18 +505,32 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
 
     private long getRssKb(long pid) {
         if (isWindows) {
-            try {
-                Process p = new ProcessBuilder("tasklist", "/FI", "PID eq " + pid, "/NH", "/FO", "CSV").start();
-                try (java.util.Scanner s = new java.util.Scanner(p.getInputStream(), getNativeCharset())) {
-                    if (s.hasNextLine()) {
-                        String line = s.nextLine();
-                        if (line.contains(",")) {
-                            String[] parts = line.replace("\"", "").split(",");
-                            if (parts.length >= 5) return Long.parseLong(parts[4].replaceAll("[^0-9]", ""));
+            synchronized (windowsStatsCache) {
+                long now = System.currentTimeMillis();
+                if (now - lastStatsUpdate > 5000) {
+                    windowsStatsCache.clear();
+                    try {
+                        Process p = new ProcessBuilder("tasklist", "/NH", "/FO", "CSV").start();
+                        try (java.util.Scanner s = new java.util.Scanner(p.getInputStream(), getNativeCharset())) {
+                            while (s.hasNextLine()) {
+                                String line = s.nextLine();
+                                if (line.contains(",")) {
+                                    String[] parts = line.replace("\"", "").split(",");
+                                    if (parts.length >= 5) {
+                                        try {
+                                            long pId = Long.parseLong(parts[1]);
+                                            long mem = Long.parseLong(parts[4].replaceAll("[^0-9]", ""));
+                                            windowsStatsCache.put(pId, mem);
+                                        } catch (NumberFormatException ignored) {}
+                                    }
+                                }
+                            }
                         }
-                    }
+                        lastStatsUpdate = now;
+                    } catch (Exception ignored) {}
                 }
-            } catch (Exception ignored) {}
+                return windowsStatsCache.getOrDefault(pid, 0L);
+            }
         } else {
             File procStatus = new File("/proc/" + pid + "/status");
             if (procStatus.exists()) {
@@ -565,16 +584,24 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                 File dir = new File(workDir);
                 if (dir.exists() && dir.isDirectory()) pb.directory(dir);
             }
+            List<String> envCommands = new ArrayList<>();
             if (envName != null && environments.containsKey(envName)) {
                 for (String line : environments.get(envName)) {
                     if (line.contains("=") && !line.startsWith(" ")) {
                         String[] kv = line.split("=", 2);
                         pb.environment().put(kv[0].trim(), kv[1].trim());
+                    } else if (!line.trim().isEmpty()) {
+                        envCommands.add(line.trim());
                     }
                 }
             }
-            if (isWindows) pb.command("cmd.exe", "/c", cmd);
-            else pb.command("sh", "-c", cmd);
+            String finalCmd = cmd;
+            if (!envCommands.isEmpty()) {
+                String joiner = isWindows ? " & " : " && ";
+                finalCmd = String.join(joiner, envCommands) + joiner + cmd;
+            }
+            if (isWindows) pb.command("cmd.exe", "/c", "\"" + finalCmd + "\"");
+            else pb.command("sh", "-c", finalCmd);
             pb.redirectErrorStream(true);
             int maxLineLength = plugin.getConfig().getInt("max-line-length", 16384);
             int bufferSize = plugin.getConfig().getInt("read-buffer-size", 8192);
