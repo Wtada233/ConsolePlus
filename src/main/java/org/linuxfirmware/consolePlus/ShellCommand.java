@@ -9,6 +9,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.linuxfirmware.consolePlus.managers.EnvironmentManager;
 import org.linuxfirmware.consolePlus.managers.ProcessManager;
+import org.linuxfirmware.consolePlus.utils.ShellUtils;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -20,12 +21,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.stream.Collectors;
 
-import org.apache.commons.exec.CommandLine;
-
 public class ShellCommand implements CommandExecutor, TabCompleter {
-    private static final java.util.Set<String> SHELL_OPERATORS = java.util.Set.of(
-        ">", ">>", "<", "<<", "|", "||", "&&", ";", "&", "1>", "2>", "2>&1", ">&", "!"
-    );
     private final ConsolePlus plugin;
     private final EnvironmentManager envManager;
     private final ProcessManager processManager;
@@ -282,20 +278,9 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
             envName = "default";
         }
         if (envName == null) envName = "default";
-        StringBuilder cmdBuilder = new StringBuilder();
-        for (int j = i; j < args.length; j++) {
-            String arg = args[j];
-            if (SHELL_OPERATORS.contains(arg)) cmdBuilder.append(arg);
-            else {
-                CommandLine cl = new CommandLine("fake");
-                cl.addArgument(arg, true);
-                String[] strings = cl.toStrings();
-                if (strings.length > 1) cmdBuilder.append(strings[1]);
-                else if (arg.isEmpty()) cmdBuilder.append("\"\"");
-            }
-            if (j < args.length - 1) cmdBuilder.append(" ");
-        }
-        processManager.executeAsync(cmdBuilder.toString(), (ConsoleCommandSender) sender, workDir, envName, customTimeout);
+        
+        String commandString = ShellUtils.buildCommand(args, i);
+        processManager.executeAsync(commandString, (ConsoleCommandSender) sender, workDir, envName, customTimeout);
     }
 
     private void handleStop(CommandSender sender, String[] args) {
