@@ -29,6 +29,15 @@ import org.bukkit.configuration.file.YamlConfiguration;
 
 public class ShellCommand implements CommandExecutor, TabCompleter {
 
+    private static final Map<Integer, String> ANSI_TO_MC = new HashMap<>();
+    static {
+        ANSI_TO_MC.put(0, "§r"); ANSI_TO_MC.put(1, "§l");
+        ANSI_TO_MC.put(30, "§0"); ANSI_TO_MC.put(31, "§c"); ANSI_TO_MC.put(32, "§a"); ANSI_TO_MC.put(33, "§e");
+        ANSI_TO_MC.put(34, "§9"); ANSI_TO_MC.put(35, "§5"); ANSI_TO_MC.put(36, "§b"); ANSI_TO_MC.put(37, "§7");
+        ANSI_TO_MC.put(90, "§8"); ANSI_TO_MC.put(91, "§c"); ANSI_TO_MC.put(92, "§a"); ANSI_TO_MC.put(93, "§e");
+        ANSI_TO_MC.put(94, "§9"); ANSI_TO_MC.put(95, "§d"); ANSI_TO_MC.put(96, "§b"); ANSI_TO_MC.put(97, "§f");
+    }
+
     private final ConsolePlus plugin;
     private final Map<Integer, ManagedProcess> activeProcesses = new ConcurrentHashMap<>();
     private final Map<String, List<String>> environments = new HashMap<>();
@@ -529,60 +538,74 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                     byte[] buffer = new byte[bufferSize];
                     int bytesRead;
                     java.io.ByteArrayOutputStream lineBuffer = new java.io.ByteArrayOutputStream();
-                    boolean pendingCR = false;
+                    
+                    int ansiState = 0; // 0: normal, 1: ESC, 2: [, 3: collecting codes
+                    StringBuilder ansiCode = new StringBuilder();
+                    boolean colorEnabled = plugin.getConfig().getBoolean("enable-color", true);
 
                     while ((bytesRead = is.read(buffer)) != -1) {
-                        boolean lastByteWasNewline = false;
                         for (int i = 0; i < bytesRead; i++) {
                             int ub = buffer[i] & 0xFF;
-                            if (pendingCR) {
-                                if (ub == 10) pendingCR = false;
-                                else {
-                                    sendFormattedMessage(sender, idPrefix, id, msg("lone-cr-detected"));
-                                    process.destroyForcibly();
-                                    activeProcesses.remove(id);
-                                    return;
+
+                            // ANSI State Machine
+                            if (ansiState == 0) {
+                                if (ub == 27) { // ESC
+                                    ansiState = 1;
+                                    continue;
                                 }
-                            } else if (ub == 13) {
-                                pendingCR = true;
+                            } else if (ansiState == 1) {
+                                if (ub == '[') { ansiState = 2; continue; }
+                                else { ansiState = 0; } // Unsupported ESC sequence
+                            } else if (ansiState == 2) {
+                                if (ub >= '0' && ub <= '9' || ub == ';') {
+                                    ansiCode.append((char) ub);
+                                    continue;
+                                } else if (ub == 'm') {
+                                    if (colorEnabled) {
+                                        String[] codes = ansiCode.toString().split(";");
+                                        for (String code : codes) {
+                                            try {
+                                                int c = Integer.parseInt(code);
+                                                String mc = ANSI_TO_MC.get(c);
+                                                if (mc != null) {
+                                                    byte[] mcBytes = mc.getBytes(charset);
+                                                    lineBuffer.write(mcBytes);
+                                                }
+                                            } catch (NumberFormatException ignored) {}
+                                        }
+                                    }
+                                }
+                                // Reset ANSI state regardless of terminator
+                                ansiCode.setLength(0);
+                                ansiState = 0;
                                 continue;
                             }
 
-                            if (ub < 32 && ub != 9 && ub != 10 && ub != 27) {
-                                sendFormattedMessage(sender, idPrefix, id, msg("incompatible-tty", "code", ub));
-                                process.destroyForcibly();
-                                activeProcesses.remove(id);
-                                return;
-                            }
-
-                            if (ub == 10) {
-                                sendFormattedMessage(sender, idPrefix, id, lineBuffer.toString(charset));
-                                lineBuffer.reset();
-                                lastByteWasNewline = true;
-                            } else {
-                                lineBuffer.write(ub);
-                                lastByteWasNewline = false;
-                                if (lineBuffer.size() > maxLineLength) {
-                                    sendFormattedMessage(sender, idPrefix, id, lineBuffer.toString(charset) + " §7(truncated...)");
+                            // Regular character handling
+                            if (ub == 10 || ub == 13) { // LF or CR
+                                if (lineBuffer.size() > 0) {
+                                    sendFormattedMessage(sender, idPrefix, id, lineBuffer.toString(charset));
                                     lineBuffer.reset();
                                 }
+                                continue;
+                            }
+
+                            if (ub < 32 && ub != 9) { // Non-printable (excluding tab)
+                                continue; // Just skip instead of killing process
+                            }
+
+                            lineBuffer.write(ub);
+                            if (lineBuffer.size() > maxLineLength) {
+                                sendFormattedMessage(sender, idPrefix, id, lineBuffer.toString(charset) + " §7(truncated...)");
+                                lineBuffer.reset();
                             }
                         }
-                        if (!lastByteWasNewline && lineBuffer.size() > 0 && !pendingCR && is.available() == 0) {
+                        
+                        // Flush remaining content if no more data is available right now
+                        if (lineBuffer.size() > 0 && is.available() == 0) {
                             sendFormattedMessage(sender, idPrefix, id, lineBuffer.toString(charset));
                             lineBuffer.reset();
                         }
-                    }
-
-                    if (pendingCR) {
-                        sendFormattedMessage(sender, idPrefix, id, msg("trailing-cr-detected"));
-                        process.destroyForcibly();
-                        activeProcesses.remove(id);
-                        return;
-                    }
-
-                    if (lineBuffer.size() > 0) {
-                        sendFormattedMessage(sender, idPrefix, id, lineBuffer.toString(charset));
                     }
                 }
 
