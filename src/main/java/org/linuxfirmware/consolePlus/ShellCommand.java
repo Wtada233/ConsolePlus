@@ -115,6 +115,10 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
 
     @Override
     public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command, @NotNull String alias, @NotNull String[] args) {
+        if (!(sender instanceof ConsoleCommandSender)) {
+            return Collections.emptyList();
+        }
+
         if (args.length == 1) {
             return filterStrings(Arrays.asList("run", "input", "list", "stop", "env", "help"), args[0]);
         }
@@ -132,7 +136,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                     int currentPos = args.length - 1;
                     if (args.length >= 3) {
                         String prev = args[currentPos - 1];
-                        if (prev.equals("-d")) return completeDirectoryPath(args[currentPos]);
+                        if (prev.equals("-d")) return completePath(args[currentPos], true, ".");
                         if (prev.equals("-e")) return filterStrings(new ArrayList<>(environments.keySet()), args[currentPos]);
                     }
 
@@ -161,7 +165,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                                 break;
                             }
                         }
-                        return completeFilePath(workDirStr, args[currentPos]);
+                        return completePath(args[currentPos], false, workDirStr);
                     }
                 case "env":
                     if (args.length == 2) {
@@ -180,54 +184,83 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         return list.stream().filter(s -> s.toLowerCase().startsWith(input.toLowerCase())).collect(Collectors.toList());
     }
 
-    private List<String> completeDirectoryPath(String input) {
-        File file = new File(input);
+    private List<String> completePath(String input, boolean onlyDirs, String baseDir) {
+        List<String> suggestions = new ArrayList<>();
         File parent;
         String prefix;
-        if (input.endsWith("/") || input.endsWith("\\") || (file.exists() && file.isDirectory() && !input.isEmpty())) {
-            parent = file;
-            prefix = "";
-        } else {
-            parent = file.getParentFile() == null ? new File(".") : file.getParentFile();
-            prefix = file.getName().toLowerCase();
-        }
-        if (!parent.exists() || !parent.isDirectory()) return Collections.emptyList();
-        File[] files = parent.listFiles(File::isDirectory);
-        if (files == null) return Collections.emptyList();
-        List<String> suggestions = new ArrayList<>();
-        String pathPrefix = input.contains("/") ? input.substring(0, input.lastIndexOf('/') + 1) :
-                          input.contains("\\") ? input.substring(0, input.lastIndexOf('\\') + 1) : "";
-        for (File f : files) {
-            if (f.getName().toLowerCase().startsWith(prefix)) {
-                suggestions.add(pathPrefix + f.getName() + File.separator);
-            }
-        }
-        return suggestions;
-    }
+        String pathPrefix;
 
-    private List<String> completeFilePath(String baseDir, String input) {
-        File file = new File(baseDir, input);
-        File parent;
-        String prefix;
-        if (input.endsWith("/") || input.endsWith("\\") || (file.exists() && file.isDirectory() && !input.isEmpty())) {
-            parent = file;
+        if (input.isEmpty()) {
+            // Handle empty input: list baseDir content + roots
+            parent = new File(baseDir);
             prefix = "";
+            pathPrefix = "";
+            
+            // Add root suggestions
+            if (File.listRoots() != null) {
+                for (File root : File.listRoots()) {
+                    String rootPath = root.getAbsolutePath();
+                    // On Windows, listRoots returns "C:\", on Linux "/"
+                    if (isWindows) {
+                         suggestions.add(rootPath);
+                    } else {
+                         // On Linux, listRoots returns "/", just add it if not already handled
+                         if (!suggestions.contains("/")) suggestions.add("/");
+                    }
+                }
+            }
         } else {
-            parent = file.getParentFile() == null ? new File(baseDir) : file.getParentFile();
-            prefix = file.getName().toLowerCase();
+            // Existing logic for non-empty input
+            File file;
+            boolean isAbsolute = input.startsWith("/") || input.startsWith("\\") || (input.length() > 1 && input.charAt(1) == ':');
+            
+            if (isAbsolute) {
+                file = new File(input);
+            } else {
+                file = new File(baseDir, input);
+            }
+
+            if (input.endsWith("/") || input.endsWith("\\") || (file.exists() && file.isDirectory())) {
+                parent = file;
+                prefix = "";
+                if (!input.endsWith("/") && !input.endsWith("\\")) {
+                    // If it's a directory but doesn't end with separator, we treat it as complete match for itself,
+                    // BUT if the user wants to go inside, they usually type /.
+                    // Here we assume if they typed a valid dir name without slash, they might want to complete inside it?
+                    // Actually, standard shell behavior: if 'foo' is dir, tab completes to 'foo/', then next tab lists inside.
+                    // But here we are generating the list.
+                    // Let's stick to: if it ends with separator, list children.
+                    // If not, we fall back to parent logic to match this name.
+                     parent = file.getParentFile();
+                     if (parent == null) parent = isAbsolute ? new File(input) : new File(baseDir); // Fallback
+                     prefix = file.getName().toLowerCase();
+                }
+            } else {
+                parent = file.getParentFile();
+                if (parent == null) {
+                    if (isAbsolute) return Collections.emptyList();
+                    parent = new File(baseDir);
+                }
+                prefix = file.getName().toLowerCase();
+            }
+            
+            int lastSlash = Math.max(input.lastIndexOf('/'), input.lastIndexOf('\\'));
+            pathPrefix = (lastSlash >= 0) ? input.substring(0, lastSlash + 1) : "";
         }
-        if (!parent.exists() || !parent.isDirectory()) return Collections.emptyList();
-        File[] files = parent.listFiles();
-        if (files == null) return Collections.emptyList();
-        List<String> suggestions = new ArrayList<>();
-        String pathPrefix = input.contains("/") ? input.substring(0, input.lastIndexOf('/') + 1) :
-                          input.contains("\\") ? input.substring(0, input.lastIndexOf('\\') + 1) : "";
-        for (File f : files) {
-            if (f.getName().toLowerCase().startsWith(prefix)) {
-                String suffix = f.isDirectory() ? File.separator : "";
-                suggestions.add(pathPrefix + f.getName() + suffix);
+
+        if (parent != null && parent.exists() && parent.isDirectory()) {
+            File[] files = parent.listFiles(onlyDirs ? File::isDirectory : null);
+            if (files != null) {
+                for (File f : files) {
+                    if (f.getName().toLowerCase().startsWith(prefix)) {
+                        String suffix = f.isDirectory() ? File.separator : "";
+                        suggestions.add(pathPrefix + f.getName() + suffix);
+                    }
+                }
             }
         }
+        
+        Collections.sort(suggestions);
         return suggestions;
     }
 
@@ -301,7 +334,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         String subCommand = args[0].toLowerCase();
         switch (subCommand) {
             case "run": handleRun(sender, args); break;
-            case "list": listProcesses(sender); break;
+            case "list": plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> listProcesses(sender)); break;
             case "stop": handleStop(sender, args); break;
             case "input": handleInput(sender, args); break;
             case "env": handleEnv(sender, args); break;
@@ -560,7 +593,10 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
     private void stopProcess(CommandSender sender, int id) {
         ManagedProcess mp = activeProcesses.get(id);
         if (mp != null) {
-            if (mp.process != null) mp.process.destroyForcibly();
+            if (mp.process != null) {
+                mp.process.toHandle().descendants().forEach(ProcessHandle::destroyForcibly);
+                mp.process.destroyForcibly();
+            }
             sender.sendMessage(msg("warn-prefix") + msg("process-stopped", "id", id));
             activeProcesses.remove(id);
         } else sender.sendMessage(msg("error-prefix") + msg("invalid-id"));
