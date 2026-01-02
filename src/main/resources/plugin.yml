@@ -1,5 +1,5 @@
 name: ConsolePlus
-version: '1.5'
+version: '1.6'
 main: org.linuxfirmware.consolePlus.ConsolePlus
 api-version: '1.21'
 commands:
