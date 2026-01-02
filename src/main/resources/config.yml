@@ -18,3 +18,11 @@ enable-color: true
 
 # Process ID prefix formatting
 id-prefix-color: "§8"
+
+# --- New Features ---
+
+# Whether to enable persistent logging for every process
+enable-process-logging: true
+
+# Directory to store process logs
+process-log-dir: "logs"

@@ -43,6 +43,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
     private final ConsolePlus plugin;
     private final Map<Integer, ManagedProcess> activeProcesses = new ConcurrentHashMap<>();
     private final Map<String, List<String>> environments = new ConcurrentHashMap<>();
+    private final java.util.Set<String> systemCommands = new java.util.TreeSet<>();
     private final File envFile;
     private final boolean isWindows;
     private String selectedEnv = "default";
@@ -52,6 +53,35 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         this.envFile = new File(plugin.getDataFolder(), "environments.yml");
         this.isWindows = System.getProperty("os.name").toLowerCase().startsWith("windows");
         loadEnvironments();
+        refreshSystemCommands();
+    }
+
+    private void refreshSystemCommands() {
+        systemCommands.clear();
+        String path = System.getenv("PATH");
+        if (path == null) path = System.getenv("Path");
+        if (path == null) return;
+
+        String separator = isWindows ? ";" : ":";
+        String[] dirs = path.split(separator);
+        for (String dir : dirs) {
+            File d = new File(dir);
+            if (d.exists() && d.isDirectory()) {
+                File[] files = d.listFiles();
+                if (files != null) {
+                    for (File f : files) {
+                        if (f.isFile() && (isWindows || f.canExecute())) {
+                            String name = f.getName();
+                            if (isWindows && name.toLowerCase().endsWith(".exe")) {
+                                systemCommands.add(name.substring(0, name.length() - 4));
+                            } else {
+                                systemCommands.add(name);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private String msg(String key) {
@@ -87,16 +117,42 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                     }
                     break;
                 case "run":
-                    if (args.length >= 3 && args[args.length - 2].equals("-d")) {
-                        return completeDirectoryPath(args[args.length - 1]);
+                    int currentPos = args.length - 1;
+                    // Check if we are completing a flag value
+                    if (args.length >= 3) {
+                        String prev = args[currentPos - 1];
+                        if (prev.equals("-d")) return completeDirectoryPath(args[currentPos]);
+                        if (prev.equals("-e")) return filterStrings(new ArrayList<>(environments.keySet()), args[currentPos]);
                     }
-                    if (args[args.length - 2].equals("-e")) {
-                        return filterStrings(new ArrayList<>(environments.keySet()), args[args.length - 1]);
+
+                    // Determine if we have already started the command
+                    int cmdPos = 1;
+                    while (cmdPos < currentPos) {
+                        if (args[cmdPos].equals("-d") || args[cmdPos].equals("-e") || args[cmdPos].equals("-t")) {
+                            cmdPos += 2;
+                        } else {
+                            break;
+                        }
                     }
-                    if (args[args.length - 2].equals("-t")) {
-                        return Collections.emptyList();
+
+                    if (currentPos <= cmdPos) {
+                        // At a position where we can either start a command or add a flag
+                        String input = args[currentPos].toLowerCase();
+                        List<String> results = new ArrayList<>();
+                        // Add flags if not already present
+                        if (!Arrays.asList(args).contains("-d")) results.add("-d");
+                        if (!Arrays.asList(args).contains("-e")) results.add("-e");
+                        if (!Arrays.asList(args).contains("-t")) results.add("-t");
+                        
+                        // Add system commands
+                        systemCommands.stream()
+                                .filter(s -> s.toLowerCase().startsWith(input))
+                                .limit(50)
+                                .forEach(results::add);
+                                
+                        return filterStrings(results, input);
                     }
-                    return filterStrings(Arrays.asList("-d", "-e", "-t"), args[args.length - 1]);
+                    break;
                 case "env":
                     if (args.length == 2) {
                         return filterStrings(Arrays.asList("create", "select", "delete", "edit", "list"), args[1]);
@@ -185,6 +241,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         final String command;
         final long startTime;
         BufferedWriter writer;
+        BufferedWriter logWriter;
         
         long lastSampleTime = 0;
         long lastCpuNanos = 0;
@@ -543,6 +600,22 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         ManagedProcess mp = new ManagedProcess(null, cmd, Charset.defaultCharset());
         activeProcesses.put(id, mp);
 
+        if (plugin.getConfig().getBoolean("enable-process-logging", true)) {
+            try {
+                File logDir = new File(plugin.getDataFolder(), plugin.getConfig().getString("process-log-dir", "logs"));
+                if (!logDir.exists()) logDir.mkdirs();
+                String timestamp = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss").format(new java.util.Date());
+                File logFile = new File(logDir, "process-" + id + "-" + timestamp + ".log");
+                mp.logWriter = new BufferedWriter(new java.io.OutputStreamWriter(new java.io.FileOutputStream(logFile), StandardCharsets.UTF_8));
+                mp.logWriter.write("Command: " + cmd + "\n");
+                mp.logWriter.write("Start Time: " + new java.util.Date() + "\n");
+                mp.logWriter.write("------------------------------------------\n");
+                mp.logWriter.flush();
+            } catch (IOException e) {
+                plugin.getLogger().warning("Could not create log file for process " + id + ": " + e.getMessage());
+            }
+        }
+
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
             String nativeEncoding = System.getProperty("sun.stdout.encoding");
             if (nativeEncoding == null) nativeEncoding = System.getProperty("native.encoding");
@@ -696,29 +769,95 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
 
                                 }
 
-                            } finally {
+                                        } finally {
 
-                                if (mp.writer != null) {
+                                            if (mp.writer != null) {
 
-                                    try { mp.writer.close(); } catch (IOException ignored) {}
+                                                try { mp.writer.close(); } catch (IOException ignored) {}
+
+                                            }
+
+                                            if (mp.logWriter != null) {
+
+                                                try {
+
+                                                    mp.logWriter.write("------------------------------------------\n");
+
+                                                    mp.logWriter.write("End Time: " + new java.util.Date() + "\n");
+
+                                                    mp.logWriter.close();
+
+                                                } catch (IOException ignored) {}
+
+                                            }
+
+                                        }
+
+                                    });
 
                                 }
 
-                            }
-
-                        });
-
-                    }
+                            
 
                 
 
-                    private void sendFormattedMessage(ConsoleCommandSender sender, String prefixColor, int id, String message) {
+                        private void sendFormattedMessage(ConsoleCommandSender sender, String prefixColor, int id, String message) {
 
-                        if (message.isEmpty()) return;
+                
 
-                        sender.sendMessage(prefixColor + "[" + id + "]§r " + message);
+                            if (message.isEmpty()) return;
 
-                    }
+                
+
+                            sender.sendMessage(prefixColor + "[" + id + "]§r " + message);
+
+                
+
+                            
+
+                
+
+                            ManagedProcess mp = activeProcesses.get(id);
+
+                
+
+                            if (mp != null && mp.logWriter != null) {
+
+                
+
+                                try {
+
+                
+
+                                    // Strip Minecraft color codes for the log file
+
+                
+
+                                    String plain = message.replaceAll("§[0-9a-fk-orA-FK-OR]", "");
+
+                
+
+                                    mp.logWriter.write("[" + new java.text.SimpleDateFormat("HH:mm:ss").format(new java.util.Date()) + "] " + plain + "\n");
+
+                
+
+                                    mp.logWriter.flush();
+
+                
+
+                                } catch (IOException ignored) {}
+
+                
+
+                            }
+
+                
+
+                        }
+
+                
+
+                    
 
                 
 
@@ -736,15 +875,23 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
 
                                 }
 
-                                if (mp.writer != null) {
+                                                if (mp.writer != null) {
 
-                                    try { mp.writer.close(); } catch (IOException ignored) {}
+                                                    try { mp.writer.close(); } catch (IOException ignored) {}
 
-                                }
+                                                }
 
-                            });
+                                                if (mp.logWriter != null) {
 
-                            activeProcesses.clear();
+                                                    try { mp.logWriter.close(); } catch (IOException ignored) {}
+
+                                                }
+
+                                            });
+
+                                            activeProcesses.clear();
+
+                                
 
                         }
 
