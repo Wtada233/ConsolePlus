@@ -15,7 +15,6 @@ import java.nio.CharBuffer;
 import java.nio.charset.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -23,7 +22,6 @@ public class ProcessManager {
     private final ConsolePlus plugin;
     private final EnvironmentManager envManager;
     private final Map<Integer, ManagedProcess> activeProcesses = new ConcurrentHashMap<>();
-    private final AtomicInteger processIdCounter = new AtomicInteger(1);
     private final boolean isWindows;
     private final Map<Long, Long> windowsStatsCache = new HashMap<>();
     private long lastStatsUpdate = 0;
@@ -32,6 +30,15 @@ public class ProcessManager {
         this.plugin = plugin;
         this.envManager = envManager;
         this.isWindows = System.getProperty("os.name").toLowerCase().startsWith("windows");
+    }
+
+    private synchronized int reserveNextId(ManagedProcess mp) {
+        int id = 1;
+        while (activeProcesses.containsKey(id)) {
+            id++;
+        }
+        activeProcesses.put(id, mp);
+        return id;
     }
 
     private String msg(String key) {
@@ -64,19 +71,18 @@ public class ProcessManager {
     }
 
     public void executeAsync(String cmd, ConsoleCommandSender sender, String workDir, String envName, Integer customTimeout) {
-        int id = processIdCounter.getAndIncrement();
-        
         if (workDir != null) {
             File dir = new File(workDir);
             if (!dir.exists() || !dir.isDirectory()) {
-                sender.sendMessage(msg("error-prefix") + msg("process-error", "id", id, "error", msg("invalid-workdir", "dir", workDir)));
+                sender.sendMessage(msg("error-prefix") + msg("process-error", "id", -1, "error", msg("invalid-workdir", "dir", workDir)));
                 return;
             }
         }
 
-        sender.sendMessage(msg("prefix") + msg("process-starting", "id", id));
         ManagedProcess mp = new ManagedProcess(null, cmd, Charset.defaultCharset());
-        activeProcesses.put(id, mp);
+        int id = reserveNextId(mp);
+
+        sender.sendMessage(msg("prefix") + msg("process-starting", "id", id));
         
         if (plugin.getConfig().getBoolean("enable-process-logging", true)) {
             try {
