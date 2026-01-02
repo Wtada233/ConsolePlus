@@ -11,6 +11,7 @@ env-reserved: "'default' is a reserved environment."
 env-delete-default: "'default' environment cannot be deleted."
 env-edit-default: "'default' environment cannot be edited."
 invalid-line-number: "Invalid line number."
+invalid-workdir: "Invalid working directory: {dir}"
 
 process-starting: "Starting process [{id}]..."
 process-started: "Process [{id}] started: {cmd}"

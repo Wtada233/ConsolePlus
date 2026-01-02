@@ -11,6 +11,7 @@ env-reserved: "'default' 是预留环境。"
 env-delete-default: "不能删除 'default' 环境。"
 env-edit-default: "不能编辑 'default' 环境。"
 invalid-line-number: "无效的行号。"
+invalid-workdir: "无效的工作目录: {dir}"
 
 process-starting: "正在启动进程 [{id}]..."
 process-started: "进程 [{id}] 已启动: {cmd}"

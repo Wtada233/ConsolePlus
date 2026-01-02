@@ -573,7 +573,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         if (workDir != null) {
             File dir = new File(workDir);
             if (!dir.exists() || !dir.isDirectory()) {
-                sender.sendMessage(msg("error-prefix") + msg("process-error", "id", id, "error", "Invalid working directory: " + workDir));
+                sender.sendMessage(msg("error-prefix") + msg("process-error", "id", id, "error", msg("invalid-workdir", "dir", workDir)));
                 return;
             }
         }
