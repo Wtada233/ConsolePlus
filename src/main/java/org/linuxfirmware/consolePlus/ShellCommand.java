@@ -539,7 +539,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                     int bytesRead;
                     java.io.ByteArrayOutputStream lineBuffer = new java.io.ByteArrayOutputStream();
                     
-                    int ansiState = 0; // 0: normal, 1: ESC, 2: [, 3: collecting codes
+                    int ansiState = 0; // 0: normal, 1: ESC, 2: [, 3: ( (G-set)
                     StringBuilder ansiCode = new StringBuilder();
                     boolean colorEnabled = plugin.getConfig().getBoolean("enable-color", true);
 
@@ -555,13 +555,14 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                                 }
                             } else if (ansiState == 1) {
                                 if (ub == '[') { ansiState = 2; continue; }
-                                else { ansiState = 0; } // Unsupported ESC sequence
-                            } else if (ansiState == 2) {
-                                if (ub >= '0' && ub <= '9' || ub == ';') {
+                                if (ub == '(') { ansiState = 3; continue; }
+                                else { ansiState = 0; continue; } // Skip or reset on single-char escape
+                            } else if (ansiState == 2) { // CSI sequence
+                                if (ub >= 0x30 && ub <= 0x3F) { // Parameter bytes (?, ;, 0-9, etc.)
                                     ansiCode.append((char) ub);
                                     continue;
-                                } else if (ub == 'm') {
-                                    if (colorEnabled) {
+                                } else if (ub >= 0x40 && ub <= 0x7E) { // Final byte (terminator)
+                                    if (ub == 'm' && colorEnabled) {
                                         String[] codes = ansiCode.toString().split(";");
                                         for (String code : codes) {
                                             try {
@@ -574,14 +575,18 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                                             } catch (NumberFormatException ignored) {}
                                         }
                                     }
+                                    ansiCode.setLength(0);
+                                    ansiState = 0;
+                                    continue;
                                 }
-                                // Reset ANSI state regardless of terminator
-                                ansiCode.setLength(0);
+                                ansiState = 0; // Lost in sequence, reset
+                                continue;
+                            } else if (ansiState == 3) { // G-set sequence (swallow one char)
                                 ansiState = 0;
                                 continue;
                             }
 
-                            // Regular character handling
+                            // Regular character handling (only if ansiState == 0)
                             if (ub == 10 || ub == 13) { // LF or CR
                                 if (lineBuffer.size() > 0) {
                                     sendFormattedMessage(sender, idPrefix, id, lineBuffer.toString(charset));
