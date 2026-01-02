@@ -1,6 +1,5 @@
 package org.linuxfirmware.consolePlus;
 
-import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
@@ -780,7 +779,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         ManagedProcess mp = activeProcesses.get(id);
         if (mp != null && mp.logWriter != null) {
             try {
-                String plain = ChatColor.stripColor(message);
+                String plain = message.replaceAll("(?i)§[0-9a-fk-or]", "");
                 mp.logWriter.write("[" + new java.text.SimpleDateFormat("HH:mm:ss").format(new java.util.Date()) + "] " + plain + "\n");
                 mp.logWriter.flush();
             } catch (IOException ignored) {}
