@@ -183,7 +183,7 @@ public class ProcessManager {
                             } else if (ansiState == 3) { ansiState = 0; continue; }
                             
                             if (ub == 10 || ub == 13) {
-                                flushBuffer(dataBuffer, decoder, sender, idPrefix, id);
+                                flushBuffer(dataBuffer, decoder, sender, idPrefix, id, false);
                                 continue;
                             }
                             
@@ -192,14 +192,18 @@ public class ProcessManager {
                             dataBuffer.put((byte) ub);
                             
                             if (dataBuffer.position() > maxLineLength) {
-                                flushBuffer(dataBuffer, decoder, sender, idPrefix, id);
+                                flushBuffer(dataBuffer, decoder, sender, idPrefix, id, false);
                                 sender.sendMessage(idPrefix + "[" + id + "]§r §7(line truncated...)");
                             }
                         }
                         
                         if (is.available() == 0 && dataBuffer.position() > 0) {
-                            flushBuffer(dataBuffer, decoder, sender, idPrefix, id);
+                            flushBuffer(dataBuffer, decoder, sender, idPrefix, id, false);
                         }
+                    }
+                    // Final flush to handle any remaining bytes
+                    if (dataBuffer.position() > 0) {
+                        flushBuffer(dataBuffer, decoder, sender, idPrefix, id, true);
                     }
                 } catch (IOException e) {
                     plugin.getLogger().warning("Error reading from process output: " + e.getMessage());
@@ -234,16 +238,22 @@ public class ProcessManager {
         });
     }
 
-    private void flushBuffer(ByteBuffer buffer, CharsetDecoder decoder, ConsoleCommandSender sender, String idPrefix, int id) {
+    private void flushBuffer(ByteBuffer buffer, CharsetDecoder decoder, ConsoleCommandSender sender, String idPrefix, int id, boolean endOfInput) {
         buffer.flip();
+        CharBuffer chars = CharBuffer.allocate(buffer.remaining() + (endOfInput ? 10 : 0)); // Extra space for potential flush
+        CoderResult result = decoder.decode(buffer, chars, endOfInput);
+        
+        if (endOfInput && result.isUnderflow()) {
+            decoder.flush(chars);
+        }
+        
+        chars.flip();
+        String line = chars.toString();
+        if (!line.isEmpty()) {
+            sendFormattedMessage(sender, idPrefix, id, line);
+        }
+        
         if (buffer.hasRemaining()) {
-            CharBuffer chars = CharBuffer.allocate(buffer.remaining());
-            decoder.decode(buffer, chars, false);
-            chars.flip();
-            String line = chars.toString();
-            if (!line.isEmpty()) {
-                sendFormattedMessage(sender, idPrefix, id, line);
-            }
             buffer.compact();
         } else {
             buffer.clear();
@@ -345,30 +355,41 @@ public class ProcessManager {
     
     private long getRssKb(long pid) {
         if (isWindows) {
-            synchronized (windowsStatsCache) {
-                long now = System.currentTimeMillis();
-                if (now - lastStatsUpdate > 5000) {
-                    windowsStatsCache.clear();
-                    try {
-                        Process p = new ProcessBuilder("tasklist", "/NH", "/FO", "CSV").start();
-                        try (java.util.Scanner s = new java.util.Scanner(p.getInputStream(), getNativeCharset())) {
-                            while (s.hasNextLine()) {
-                                String line = s.nextLine();
-                                if (line.contains(",")) {
-                                    String[] parts = line.replace("\"", "").split(",");
-                                    if (parts.length >= 5) {
-                                        try {
-                                            long pId = Long.parseLong(parts[1]);
-                                            long mem = Long.parseLong(parts[4].replaceAll("[^0-9]", ""));
-                                            windowsStatsCache.put(pId, mem);
-                                        } catch (NumberFormatException ignored) {}
+            long now = System.currentTimeMillis();
+            if (now - lastStatsUpdate > 5000) {
+                // Trigger async update if not already updating
+                synchronized (windowsStatsCache) {
+                    if (now - lastStatsUpdate > 5000) {
+                        lastStatsUpdate = now; // Prevent multiple triggers
+                        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
+                            Map<Long, Long> newStats = new HashMap<>();
+                            try {
+                                Process p = new ProcessBuilder("tasklist", "/NH", "/FO", "CSV").start();
+                                try (java.util.Scanner s = new java.util.Scanner(p.getInputStream(), getNativeCharset())) {
+                                    while (s.hasNextLine()) {
+                                        String line = s.nextLine();
+                                        if (line.contains(",")) {
+                                            String[] parts = line.replace("\"", "").split(",");
+                                            if (parts.length >= 5) {
+                                                try {
+                                                    long pId = Long.parseLong(parts[1]);
+                                                    long mem = Long.parseLong(parts[4].replaceAll("[^0-9]", ""));
+                                                    newStats.put(pId, mem);
+                                                } catch (NumberFormatException ignored) {}
+                                            }
+                                        }
                                     }
                                 }
-                            }
-                        }
-                        lastStatsUpdate = now;
-                    } catch (Exception ignored) {}
+                                synchronized (windowsStatsCache) {
+                                    windowsStatsCache.clear();
+                                    windowsStatsCache.putAll(newStats);
+                                }
+                            } catch (Exception ignored) {}
+                        });
+                    }
                 }
+            }
+            synchronized (windowsStatsCache) {
                 return windowsStatsCache.getOrDefault(pid, 0L);
             }
         } else {
