@@ -49,9 +49,12 @@ public class I18n {
         }
         
         // Load default values from JAR if missing in file
-        InputStream defStream = plugin.getResource("languages/" + langName + ".yml");
-        if (defStream != null) {
-            langConfig.setDefaults(YamlConfiguration.loadConfiguration(new InputStreamReader(defStream, StandardCharsets.UTF_8)));
+        try (InputStream defStream = plugin.getResource("languages/" + langName + ".yml")) {
+            if (defStream != null) {
+                langConfig.setDefaults(YamlConfiguration.loadConfiguration(new InputStreamReader(defStream, StandardCharsets.UTF_8)));
+            }
+        } catch (IOException e) {
+            plugin.getLogger().warning("Could not close default language stream: " + e.getMessage());
         }
     }
 

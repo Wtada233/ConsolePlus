@@ -357,8 +357,12 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
             if (args[i].equals("-d") && i + 1 < args.length) { workDir = args[i + 1]; i += 2; }
             else if (args[i].equals("-e") && i + 1 < args.length) { envName = args[i + 1]; i += 2; }
             else if (args[i].equals("-t") && i + 1 < args.length) {
-                try { customTimeout = Integer.parseInt(args[i + 1]); }
-                catch (NumberFormatException e) { sender.sendMessage(msg("error-prefix") + msg("invalid-id")); }
+                try {
+                    customTimeout = Integer.parseInt(args[i + 1]);
+                } catch (NumberFormatException e) {
+                    sender.sendMessage(msg("error-prefix") + msg("invalid-timeout"));
+                    return;
+                }
                 i += 2;
             } else break;
         }
@@ -409,7 +413,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
             ManagedProcess mp = activeProcesses.get(id);
             if (mp != null && mp.writer != null) {
                 mp.writer.write(input);
-                mp.writer.newLine();
+                mp.writer.write("\n");
                 mp.writer.flush();
                 sender.sendMessage(msg("prefix") + msg("input-sent", "id", id));
             } else sender.sendMessage(msg("error-prefix") + msg("process-not-found"));
@@ -651,7 +655,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                 String joiner = isWindows ? " & " : " && ";
                 finalCmd = String.join(joiner, envCommands) + joiner + cmd;
             }
-            if (isWindows) pb.command("cmd.exe", "/c", "\"" + finalCmd + "\"");
+            if (isWindows) pb.command("cmd.exe", "/c", finalCmd);
             else pb.command("sh", "-c", finalCmd);
             pb.redirectErrorStream(true);
             int maxLineLength = plugin.getConfig().getInt("max-line-length", 16384);
