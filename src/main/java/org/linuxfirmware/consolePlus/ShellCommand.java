@@ -87,10 +87,13 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                     }
                     break;
                 case "run":
+                    if (args.length >= 3 && args[args.length - 2].equals("-d")) {
+                        return completeDirectoryPath(args[args.length - 1]);
+                    }
                     if (args[args.length - 2].equals("-e")) {
                         return filterStrings(new ArrayList<>(environments.keySet()), args[args.length - 1]);
                     }
-                    if (args[args.length - 2].equals("-t") || args[args.length - 2].equals("-d")) {
+                    if (args[args.length - 2].equals("-t")) {
                         return Collections.emptyList();
                     }
                     return filterStrings(Arrays.asList("-d", "-e", "-t"), args[args.length - 1]);
@@ -109,6 +112,38 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
 
     private List<String> filterStrings(List<String> list, String input) {
         return list.stream().filter(s -> s.toLowerCase().startsWith(input.toLowerCase())).collect(Collectors.toList());
+    }
+
+    private List<String> completeDirectoryPath(String input) {
+        File file = new File(input);
+        File parent;
+        String prefix;
+
+        if (input.endsWith("/") || input.endsWith("\\") || (file.exists() && file.isDirectory() && !input.isEmpty())) {
+            parent = file;
+            prefix = "";
+        } else {
+            parent = file.getParentFile() == null ? new File(".") : file.getParentFile();
+            prefix = file.getName().toLowerCase();
+        }
+
+        if (!parent.exists() || !parent.isDirectory()) {
+            return Collections.emptyList();
+        }
+
+        File[] files = parent.listFiles(File::isDirectory);
+        if (files == null) return Collections.emptyList();
+
+        List<String> suggestions = new ArrayList<>();
+        String pathPrefix = input.contains("/") ? input.substring(0, input.lastIndexOf('/') + 1) : 
+                          input.contains("\\") ? input.substring(0, input.lastIndexOf('\\') + 1) : "";
+
+        for (File f : files) {
+            if (f.getName().toLowerCase().startsWith(prefix)) {
+                suggestions.add(pathPrefix + f.getName() + File.separator);
+            }
+        }
+        return suggestions;
     }
 
     private void loadEnvironments() {
