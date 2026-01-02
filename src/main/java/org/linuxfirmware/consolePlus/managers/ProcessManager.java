@@ -257,15 +257,16 @@ public class ProcessManager {
         }
     }
 
-    public void stopProcess(int id) {
-        ManagedProcess mp = activeProcesses.get(id);
+    public boolean stopProcess(int id) {
+        ManagedProcess mp = activeProcesses.remove(id);
         if (mp != null) {
             if (mp.process != null) {
                 mp.process.toHandle().descendants().forEach(ProcessHandle::destroyForcibly);
                 mp.process.destroyForcibly();
             }
-            activeProcesses.remove(id);
+            return true;
         }
+        return false;
     }
     
     public void sendInput(int id, String input) throws IOException {

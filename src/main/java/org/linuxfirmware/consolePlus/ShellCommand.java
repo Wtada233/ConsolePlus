@@ -305,8 +305,11 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         }
         try {
             int id = Integer.parseInt(args[1]);
-            processManager.stopProcess(id);
-            sender.sendMessage(msg("warn-prefix") + msg("process-stopped", "id", id));
+            if (processManager.stopProcess(id)) {
+                sender.sendMessage(msg("warn-prefix") + msg("process-stopped", "id", id));
+            } else {
+                sender.sendMessage(msg("error-prefix") + msg("invalid-id"));
+            }
         } catch (NumberFormatException e) { sender.sendMessage(msg("error-prefix") + msg("invalid-id")); }
     }
 
