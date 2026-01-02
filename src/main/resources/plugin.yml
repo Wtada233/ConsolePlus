@@ -1,0 +1,8 @@
+name: ConsolePlus
+version: '1.5'
+main: org.linuxfirmware.consolePlus.ConsolePlus
+api-version: '1.21'
+commands:
+  shell:
+    description: Manage and execute system commands.
+    usage: /shell <run|list|stop|help> [args]

@@ -1,0 +1,20 @@
+# ConsolePlus Configuration
+
+# Language file to use (located in languages/ folder, without .yml)
+# Currently supported: en_US, zh_CN
+language: zh_CN
+
+# Maximum length of a single output line before truncation (to prevent OOM)
+max-line-length: 16384
+
+# Size of the read buffer in bytes
+read-buffer-size: 8192
+
+# Default execution timeout in seconds (0 for no timeout)
+default-timeout: 0
+
+# Whether to enable ANSI color support in console output
+enable-color: true
+
+# Process ID prefix formatting
+id-prefix-color: "§8"
