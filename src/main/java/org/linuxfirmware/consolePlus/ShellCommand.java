@@ -22,6 +22,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -43,7 +44,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
     private final ConsolePlus plugin;
     private final Map<Integer, ManagedProcess> activeProcesses = new ConcurrentHashMap<>();
     private final Map<String, List<String>> environments = new ConcurrentHashMap<>();
-    private final java.util.Set<String> systemCommands = new java.util.TreeSet<>();
+    private final java.util.Set<String> systemCommands = new ConcurrentSkipListSet<>();
     private final File envFile;
     private final boolean isWindows;
     private String selectedEnv = "default";
@@ -53,7 +54,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         this.envFile = new File(plugin.getDataFolder(), "environments.yml");
         this.isWindows = System.getProperty("os.name").toLowerCase().startsWith("windows");
         loadEnvironments();
-        refreshSystemCommands();
+        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, this::refreshSystemCommands);
     }
 
     private void refreshSystemCommands() {
@@ -118,14 +119,12 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                     break;
                 case "run":
                     int currentPos = args.length - 1;
-                    // Check if we are completing a flag value
                     if (args.length >= 3) {
                         String prev = args[currentPos - 1];
                         if (prev.equals("-d")) return completeDirectoryPath(args[currentPos]);
                         if (prev.equals("-e")) return filterStrings(new ArrayList<>(environments.keySet()), args[currentPos]);
                     }
 
-                    // Determine if we have already started the command
                     int cmdPos = 1;
                     while (cmdPos < currentPos) {
                         if (args[cmdPos].equals("-d") || args[cmdPos].equals("-e") || args[cmdPos].equals("-t")) {
@@ -136,23 +135,23 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                     }
 
                     if (currentPos <= cmdPos) {
-                        // At a position where we can either start a command or add a flag
                         String input = args[currentPos].toLowerCase();
                         List<String> results = new ArrayList<>();
-                        // Add flags if not already present
                         if (!Arrays.asList(args).contains("-d")) results.add("-d");
                         if (!Arrays.asList(args).contains("-e")) results.add("-e");
                         if (!Arrays.asList(args).contains("-t")) results.add("-t");
-                        
-                        // Add system commands
-                        systemCommands.stream()
-                                .filter(s -> s.toLowerCase().startsWith(input))
-                                .limit(50)
-                                .forEach(results::add);
-                                
+                        systemCommands.stream().filter(s -> s.toLowerCase().startsWith(input)).limit(50).forEach(results::add);
                         return filterStrings(results, input);
+                    } else {
+                        String workDirStr = ".";
+                        for (int k = 0; k < args.length - 1; k++) {
+                            if (args[k].equals("-d") && k + 1 < args.length) {
+                                workDirStr = args[k+1];
+                                break;
+                            }
+                        }
+                        return completeFilePath(workDirStr, args[currentPos]);
                     }
-                    break;
                 case "env":
                     if (args.length == 2) {
                         return filterStrings(Arrays.asList("create", "select", "delete", "edit", "list"), args[1]);
@@ -174,7 +173,6 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         File file = new File(input);
         File parent;
         String prefix;
-
         if (input.endsWith("/") || input.endsWith("\\") || (file.exists() && file.isDirectory() && !input.isEmpty())) {
             parent = file;
             prefix = "";
@@ -182,21 +180,41 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
             parent = file.getParentFile() == null ? new File(".") : file.getParentFile();
             prefix = file.getName().toLowerCase();
         }
-
-        if (!parent.exists() || !parent.isDirectory()) {
-            return Collections.emptyList();
-        }
-
+        if (!parent.exists() || !parent.isDirectory()) return Collections.emptyList();
         File[] files = parent.listFiles(File::isDirectory);
         if (files == null) return Collections.emptyList();
-
         List<String> suggestions = new ArrayList<>();
-        String pathPrefix = input.contains("/") ? input.substring(0, input.lastIndexOf('/') + 1) : 
+        String pathPrefix = input.contains("/") ? input.substring(0, input.lastIndexOf('/') + 1) :
                           input.contains("\\") ? input.substring(0, input.lastIndexOf('\\') + 1) : "";
-
         for (File f : files) {
             if (f.getName().toLowerCase().startsWith(prefix)) {
                 suggestions.add(pathPrefix + f.getName() + File.separator);
+            }
+        }
+        return suggestions;
+    }
+
+    private List<String> completeFilePath(String baseDir, String input) {
+        File file = new File(baseDir, input);
+        File parent;
+        String prefix;
+        if (input.endsWith("/") || input.endsWith("\\") || (file.exists() && file.isDirectory() && !input.isEmpty())) {
+            parent = file;
+            prefix = "";
+        } else {
+            parent = file.getParentFile() == null ? new File(baseDir) : file.getParentFile();
+            prefix = file.getName().toLowerCase();
+        }
+        if (!parent.exists() || !parent.isDirectory()) return Collections.emptyList();
+        File[] files = parent.listFiles();
+        if (files == null) return Collections.emptyList();
+        List<String> suggestions = new ArrayList<>();
+        String pathPrefix = input.contains("/") ? input.substring(0, input.lastIndexOf('/') + 1) :
+                          input.contains("\\") ? input.substring(0, input.lastIndexOf('\\') + 1) : "";
+        for (File f : files) {
+            if (f.getName().toLowerCase().startsWith(prefix)) {
+                String suffix = f.isDirectory() ? File.separator : "";
+                suggestions.add(pathPrefix + f.getName() + suffix);
             }
         }
         return suggestions;
@@ -242,7 +260,6 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         final long startTime;
         BufferedWriter writer;
         BufferedWriter logWriter;
-        
         long lastSampleTime = 0;
         long lastCpuNanos = 0;
         double lastUsage = 0.0;
@@ -266,36 +283,20 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
             sender.sendMessage(msg("error-prefix") + msg("access-denied"));
             return true;
         }
-
         if (args.length == 0) {
             sendHelp(sender);
             return true;
         }
-
         String subCommand = args[0].toLowerCase();
-
         switch (subCommand) {
-            case "run":
-                handleRun(sender, args);
-                break;
-            case "list":
-                listProcesses(sender);
-                break;
-            case "stop":
-                handleStop(sender, args);
-                break;
-            case "input":
-                handleInput(sender, args);
-                break;
-            case "env":
-                handleEnv(sender, args);
-                break;
+            case "run": handleRun(sender, args); break;
+            case "list": listProcesses(sender); break;
+            case "stop": handleStop(sender, args); break;
+            case "input": handleInput(sender, args); break;
+            case "env": handleEnv(sender, args); break;
             case "help":
-            default:
-                sendHelp(sender);
-                break;
+            default: sendHelp(sender); break;
         }
-
         return true;
     }
 
@@ -308,62 +309,42 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
             sender.sendMessage(msg("error-prefix") + "Usage: /shell run [-d dir] [-e env] [-t timeout] <command>");
             return;
         }
-
         String workDir = null;
         String envName = selectedEnv;
         Integer customTimeout = null;
         int i = 1;
         while (i < args.length) {
-            if (args[i].equals("-d") && i + 1 < args.length) {
-                workDir = args[i + 1];
+            if (args[i].equals("-d") && i + 1 < args.length) { workDir = args[i + 1]; i += 2; }
+            else if (args[i].equals("-e") && i + 1 < args.length) { envName = args[i + 1]; i += 2; }
+            else if (args[i].equals("-t") && i + 1 < args.length) {
+                try { customTimeout = Integer.parseInt(args[i + 1]); }
+                catch (NumberFormatException e) { sender.sendMessage(msg("error-prefix") + msg("invalid-id")); }
                 i += 2;
-            } else if (args[i].equals("-e") && i + 1 < args.length) {
-                envName = args[i + 1];
-                i += 2;
-            } else if (args[i].equals("-t") && i + 1 < args.length) {
-                try {
-                    customTimeout = Integer.parseInt(args[i + 1]);
-                } catch (NumberFormatException e) {
-                    sender.sendMessage(msg("error-prefix") + msg("invalid-id"));
-                }
-                i += 2;
-            } else {
-                break;
-            }
+            } else break;
         }
-
         if (i >= args.length) {
             sender.sendMessage(msg("error-prefix") + msg("no-command-specified"));
             return;
         }
-
         if (envName != null && !environments.containsKey(envName)) {
             sender.sendMessage(msg("warn-prefix") + msg("env-fallback", "name", envName));
             envName = "default";
         }
         if (envName == null) envName = "default";
-
         StringBuilder cmdBuilder = new StringBuilder();
         for (int j = i; j < args.length; j++) {
             String arg = args[j];
-            if (SHELL_OPERATORS.contains(arg)) {
-                cmdBuilder.append(arg);
-            } else {
-                // Use CommandLine to get a safely escaped/quoted argument for the current platform
+            if (SHELL_OPERATORS.contains(arg)) cmdBuilder.append(arg);
+            else {
                 CommandLine cl = new CommandLine("fake");
                 cl.addArgument(arg, true);
                 String[] strings = cl.toStrings();
-                if (strings.length > 1) {
-                    cmdBuilder.append(strings[1]);
-                } else if (arg.isEmpty()) {
-                    cmdBuilder.append("\"\"");
-                }
+                if (strings.length > 1) cmdBuilder.append(strings[1]);
+                else if (arg.isEmpty()) cmdBuilder.append("\"\"");
             }
             if (j < args.length - 1) cmdBuilder.append(" ");
         }
-        
-        String fullCommand = cmdBuilder.toString();
-        executeAsync(fullCommand, (ConsoleCommandSender) sender, workDir, envName, customTimeout);
+        executeAsync(cmdBuilder.toString(), (ConsoleCommandSender) sender, workDir, envName, customTimeout);
     }
 
     private void handleStop(CommandSender sender, String[] args) {
@@ -374,9 +355,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         try {
             int id = Integer.parseInt(args[1]);
             stopProcess(sender, id);
-        } catch (NumberFormatException e) {
-            sender.sendMessage(msg("error-prefix") + msg("invalid-id"));
-        }
+        } catch (NumberFormatException e) { sender.sendMessage(msg("error-prefix") + msg("invalid-id")); }
     }
 
     private void handleInput(CommandSender sender, String[] args) {
@@ -393,12 +372,8 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                 mp.writer.newLine();
                 mp.writer.flush();
                 sender.sendMessage(msg("prefix") + msg("input-sent", "id", id));
-            } else {
-                sender.sendMessage(msg("error-prefix") + msg("process-not-found"));
-            }
-        } catch (Exception e) {
-            sender.sendMessage(msg("error-prefix") + "Error: " + e.getMessage());
-        }
+            } else sender.sendMessage(msg("error-prefix") + msg("process-not-found"));
+        } catch (Exception e) { sender.sendMessage(msg("error-prefix") + "Error: " + e.getMessage()); }
     }
 
     private void handleEnv(CommandSender sender, String[] args) {
@@ -411,7 +386,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
             case "create":
                 if (args.length < 3) { sender.sendMessage(msg("error-prefix") + "/shell env create <name>"); return; }
                 if (args[2].equalsIgnoreCase("default")) { sender.sendMessage(msg("error-prefix") + msg("env-reserved")); return; }
-                environments.putIfAbsent(args[2], new ArrayList<>());
+                environments.putIfAbsent(args[2], new CopyOnWriteArrayList<>());
                 saveEnvironments();
                 sender.sendMessage(msg("prefix") + msg("env-created", "name", args[2]));
                 break;
@@ -448,12 +423,9 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                     List<String> envLines = environments.get(args[2]);
                     if (envLines == null) { sender.sendMessage(msg("error-prefix") + msg("env-not-found")); return; }
                     sender.sendMessage(msg("prefix") + msg("list-env-details", "name", args[2]));
-                    if (envLines.isEmpty()) {
-                        sender.sendMessage(msg("list-env-empty"));
-                    } else {
-                        for (int j = 0; j < envLines.size(); j++) {
-                            sender.sendMessage("§f" + (j + 1) + ". §7" + envLines.get(j));
-                        }
+                    if (envLines.isEmpty()) sender.sendMessage(msg("list-env-empty"));
+                    else {
+                        for (int j = 0; j < envLines.size(); j++) sender.sendMessage("§f" + (j + 1) + ". §7" + envLines.get(j));
                     }
                 }
                 break;
@@ -497,12 +469,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         activeProcesses.forEach((id, mp) -> {
             long duration = (System.currentTimeMillis() - mp.startTime) / 1000;
             String status = (mp.process == null) ? msg("list-starting") : "";
-            
-            String stats = "";
-            if (mp.process != null && mp.process.isAlive()) {
-                stats = getProcessStats(mp);
-            }
-
+            String stats = (mp.process != null && mp.process.isAlive()) ? getProcessStats(mp) : "";
             sender.sendMessage(String.format("§f[%d] %s§a%s §7(%ds) %s", id, status, mp.command, duration, stats));
         });
     }
@@ -510,29 +477,22 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
     private String getProcessStats(ManagedProcess mp) {
         ProcessHandle handle = mp.process.toHandle();
         List<ProcessHandle> tree = Stream.concat(Stream.of(handle), handle.descendants()).collect(Collectors.toList());
-        
         long totalRssKb = 0;
         long totalCpuNanos = 0;
-
         for (ProcessHandle h : tree) {
             totalRssKb += getRssKb(h.pid());
             totalCpuNanos += h.info().totalCpuDuration().map(java.time.Duration::toNanos).orElse(0L);
         }
-
         long now = System.nanoTime();
         if (mp.lastSampleTime > 0) {
             long timeDelta = now - mp.lastSampleTime;
             long cpuDelta = totalCpuNanos - mp.lastCpuNanos;
-            if (timeDelta > 0) {
-                mp.lastUsage = (100.0 * cpuDelta) / timeDelta;
-            }
+            if (timeDelta > 0) mp.lastUsage = (100.0 * cpuDelta) / timeDelta;
         }
         mp.lastSampleTime = now;
         mp.lastCpuNanos = totalCpuNanos;
-
         String rssDisplay = (totalRssKb > 1024) ? (totalRssKb / 1024 + " MB") : (totalRssKb + " kB");
         String cpuDisplay = String.format("%.1f%%", Math.min(100.0 * Runtime.getRuntime().availableProcessors(), mp.lastUsage));
-        
         return msg("process-stats", "mem", rssDisplay, "cpu", cpuDisplay);
     }
 
@@ -540,19 +500,14 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
         if (isWindows) {
             try {
                 Process p = new ProcessBuilder("tasklist", "/FI", "PID eq " + pid, "/NH", "/FO", "CSV").start();
-                String nativeEncoding = System.getProperty("sun.stdout.encoding");
-                if (nativeEncoding == null) nativeEncoding = System.getProperty("native.encoding");
+                String nativeEncoding = System.getProperty("sun.stdout.encoding") != null ? System.getProperty("sun.stdout.encoding") : System.getProperty("native.encoding");
                 Charset charset = (nativeEncoding != null) ? Charset.forName(nativeEncoding) : Charset.defaultCharset();
-                
                 try (java.util.Scanner s = new java.util.Scanner(p.getInputStream(), charset)) {
                     if (s.hasNextLine()) {
                         String line = s.nextLine();
                         if (line.contains(",")) {
                             String[] parts = line.replace("\"", "").split(",");
-                            if (parts.length >= 5) {
-                                String memStr = parts[4].replaceAll("[^0-9]", "");
-                                return Long.parseLong(memStr);
-                            }
+                            if (parts.length >= 5) return Long.parseLong(parts[4].replaceAll("[^0-9]", ""));
                         }
                     }
                 }
@@ -563,9 +518,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                 try {
                     List<String> lines = java.nio.file.Files.readAllLines(procStatus.toPath());
                     for (String line : lines) {
-                        if (line.startsWith("VmRSS:")) {
-                            return Long.parseLong(line.split(":")[1].trim().split(" ")[0]);
-                        }
+                        if (line.startsWith("VmRSS:")) return Long.parseLong(line.split(":")[1].trim().split(" ")[0]);
                     }
                 } catch (Exception ignored) {}
             } else {
@@ -583,23 +536,17 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
     private void stopProcess(CommandSender sender, int id) {
         ManagedProcess mp = activeProcesses.get(id);
         if (mp != null) {
-            if (mp.process != null) {
-                mp.process.destroyForcibly();
-            }
+            if (mp.process != null) mp.process.destroyForcibly();
             sender.sendMessage(msg("warn-prefix") + msg("process-stopped", "id", id));
             activeProcesses.remove(id);
-        } else {
-            sender.sendMessage(msg("error-prefix") + msg("invalid-id"));
-        }
+        } else sender.sendMessage(msg("error-prefix") + msg("invalid-id"));
     }
 
     private void executeAsync(String cmd, ConsoleCommandSender sender, String workDir, String envName, Integer customTimeout) {
         int id = getNextId();
         sender.sendMessage(msg("prefix") + msg("process-starting", "id", id));
-
         ManagedProcess mp = new ManagedProcess(null, cmd, Charset.defaultCharset());
         activeProcesses.put(id, mp);
-
         if (plugin.getConfig().getBoolean("enable-process-logging", true)) {
             try {
                 File logDir = new File(plugin.getDataFolder(), plugin.getConfig().getString("process-log-dir", "logs"));
@@ -607,58 +554,36 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                 String timestamp = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss").format(new java.util.Date());
                 File logFile = new File(logDir, "process-" + id + "-" + timestamp + ".log");
                 mp.logWriter = new BufferedWriter(new java.io.OutputStreamWriter(new java.io.FileOutputStream(logFile), StandardCharsets.UTF_8));
-                mp.logWriter.write("Command: " + cmd + "\n");
-                mp.logWriter.write("Start Time: " + new java.util.Date() + "\n");
-                mp.logWriter.write("------------------------------------------\n");
+                mp.logWriter.write("Command: " + cmd + "\nStart Time: " + new java.util.Date() + "\n------------------------------------------\n");
                 mp.logWriter.flush();
-            } catch (IOException e) {
-                plugin.getLogger().warning("Could not create log file for process " + id + ": " + e.getMessage());
-            }
+            } catch (IOException e) { plugin.getLogger().warning("Could not create log file for process " + id + ": " + e.getMessage()); }
         }
-
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
-            String nativeEncoding = System.getProperty("sun.stdout.encoding");
-            if (nativeEncoding == null) nativeEncoding = System.getProperty("native.encoding");
+            String nativeEncoding = System.getProperty("sun.stdout.encoding") != null ? System.getProperty("sun.stdout.encoding") : System.getProperty("native.encoding");
             Charset charset = (nativeEncoding != null) ? Charset.forName(nativeEncoding) : Charset.defaultCharset();
-
             ProcessBuilder pb = new ProcessBuilder();
             if (workDir != null) {
                 File dir = new File(workDir);
                 if (dir.exists() && dir.isDirectory()) pb.directory(dir);
             }
-
-            List<String> envCommands = new ArrayList<>();
             if (envName != null && environments.containsKey(envName)) {
                 for (String line : environments.get(envName)) {
                     if (line.contains("=") && !line.startsWith(" ")) {
                         String[] kv = line.split("=", 2);
                         pb.environment().put(kv[0].trim(), kv[1].trim());
-                    } else {
-                        envCommands.add(line);
                     }
                 }
             }
-
-            String finalCmd = cmd;
-            if (!envCommands.isEmpty()) {
-                String joiner = isWindows ? " & " : " && ";
-                finalCmd = String.join(joiner, envCommands) + joiner + cmd;
-            }
-
-            if (isWindows) pb.command("cmd.exe", "/c", finalCmd);
-            else pb.command("sh", "-c", finalCmd);
-
+            if (isWindows) pb.command("cmd.exe", "/c", cmd);
+            else pb.command("sh", "-c", cmd);
             pb.redirectErrorStream(true);
-
             int maxLineLength = plugin.getConfig().getInt("max-line-length", 16384);
             int bufferSize = plugin.getConfig().getInt("read-buffer-size", 8192);
             int timeout = (customTimeout != null) ? customTimeout : plugin.getConfig().getInt("default-timeout", 0);
             String idPrefix = plugin.getConfig().getString("id-prefix-color", "§8");
-
             try {
                 Process process = pb.start();
                 mp.updateProcess(process, charset);
-
                 if (timeout > 0) {
                     plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
                         if (process.isAlive()) {
@@ -668,235 +593,98 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                         }
                     }, timeout * 20L);
                 }
-
                 try (InputStream is = process.getInputStream()) {
                     byte[] buffer = new byte[bufferSize];
                     int bytesRead;
                     java.io.ByteArrayOutputStream lineBuffer = new java.io.ByteArrayOutputStream();
-                    
-                    int ansiState = 0; // 0: normal, 1: ESC, 2: [, 3: ( (G-set)
+                    int ansiState = 0;
                     StringBuilder ansiCode = new StringBuilder();
                     boolean colorEnabled = plugin.getConfig().getBoolean("enable-color", true);
-
                     while ((bytesRead = is.read(buffer)) != -1) {
-                        for (int i = 0; i < bytesRead; i++) {
-                            int ub = buffer[i] & 0xFF;
-
-                            // ANSI State Machine
+                        for (int k = 0; k < bytesRead; k++) {
+                            int ub = buffer[k] & 0xFF;
                             if (ansiState == 0) {
-                                if (ub == 27) { // ESC
-                                    ansiState = 1;
-                                    continue;
-                                }
+                                if (ub == 27) { ansiState = 1; continue; }
                             } else if (ansiState == 1) {
                                 if (ub == '[') { ansiState = 2; continue; }
                                 if (ub == '(') { ansiState = 3; continue; }
-                                else { ansiState = 0; continue; } // Skip or reset on single-char escape
-                            } else if (ansiState == 2) { // CSI sequence
-                                if (ub >= 0x30 && ub <= 0x3F) { // Parameter bytes (?, ;, 0-9, etc.)
-                                    ansiCode.append((char) ub);
-                                    continue;
-                                } else if (ub >= 0x40 && ub <= 0x7E) { // Final byte (terminator)
+                                else { ansiState = 0; continue; }
+                            } else if (ansiState == 2) {
+                                if (ub >= 0x30 && ub <= 0x3F) { ansiCode.append((char) ub); continue; }
+                                else if (ub >= 0x40 && ub <= 0x7E) {
                                     if (ub == 'm' && colorEnabled) {
-                                        String[] codes = ansiCode.toString().split(";");
-                                        for (String code : codes) {
+                                        for (String code : ansiCode.toString().split(";")) {
                                             try {
-                                                int c = Integer.parseInt(code);
-                                                String mc = ANSI_TO_MC.get(c);
-                                                if (mc != null) {
-                                                    byte[] mcBytes = mc.getBytes(charset);
-                                                    lineBuffer.write(mcBytes);
-                                                }
+                                                String mc = ANSI_TO_MC.get(Integer.parseInt(code));
+                                                if (mc != null) lineBuffer.write(mc.getBytes(charset));
                                             } catch (NumberFormatException ignored) {}
                                         }
                                     }
-                                    ansiCode.setLength(0);
-                                    ansiState = 0;
-                                    continue;
+                                    ansiCode.setLength(0); ansiState = 0; continue;
                                 }
-                                ansiState = 0; // Lost in sequence, reset
-                                continue;
-                            } else if (ansiState == 3) { // G-set sequence (swallow one char)
-                                ansiState = 0;
-                                continue;
-                            }
-
-                            // Regular character handling (only if ansiState == 0)
-                            if (ub == 10 || ub == 13) { // LF or CR
-                                if (lineBuffer.size() > 0) {
-                                    sendFormattedMessage(sender, idPrefix, id, lineBuffer.toString(charset));
-                                    lineBuffer.reset();
-                                }
+                                ansiState = 0; continue;
+                            } else if (ansiState == 3) { ansiState = 0; continue; }
+                            if (ub == 10 || ub == 13) {
+                                if (lineBuffer.size() > 0) { sendFormattedMessage(sender, idPrefix, id, lineBuffer.toString(charset)); lineBuffer.reset(); }
                                 continue;
                             }
-
-                            if (ub < 32 && ub != 9) { // Non-printable (excluding tab)
-                                continue; // Just skip instead of killing process
-                            }
-
+                            if (ub < 32 && ub != 9) continue;
                             lineBuffer.write(ub);
                             if (lineBuffer.size() > maxLineLength) {
                                 sendFormattedMessage(sender, idPrefix, id, lineBuffer.toString(charset) + " §7(truncated...)");
                                 lineBuffer.reset();
                             }
                         }
-                        
-                        // Flush remaining content if no more data is available right now
                         if (lineBuffer.size() > 0 && is.available() == 0) {
                             sendFormattedMessage(sender, idPrefix, id, lineBuffer.toString(charset));
                             lineBuffer.reset();
                         }
                     }
                 }
-
-                                int exitCode = process.waitFor();
-
-                                if (activeProcesses.containsKey(id)) {
-
-                                    sender.sendMessage(msg("warn-prefix") + msg("process-exited", "id", id, "code", exitCode));
-
-                                    activeProcesses.remove(id);
-
-                                }
-
-                            } catch (Exception e) {
-
-                                if (activeProcesses.containsKey(id)) {
-
-                                    sender.sendMessage(msg("error-prefix") + msg("process-error", "id", id, "error", e.getMessage()));
-
-                                    activeProcesses.remove(id);
-
-                                }
-
-                                        } finally {
-
-                                            if (mp.writer != null) {
-
-                                                try { mp.writer.close(); } catch (IOException ignored) {}
-
-                                            }
-
-                                            if (mp.logWriter != null) {
-
-                                                try {
-
-                                                    mp.logWriter.write("------------------------------------------\n");
-
-                                                    mp.logWriter.write("End Time: " + new java.util.Date() + "\n");
-
-                                                    mp.logWriter.close();
-
-                                                } catch (IOException ignored) {}
-
-                                            }
-
-                                        }
-
-                                    });
-
-                                }
-
-                            
-
-                
-
-                        private void sendFormattedMessage(ConsoleCommandSender sender, String prefixColor, int id, String message) {
-
-                
-
-                            if (message.isEmpty()) return;
-
-                
-
-                            sender.sendMessage(prefixColor + "[" + id + "]§r " + message);
-
-                
-
-                            
-
-                
-
-                            ManagedProcess mp = activeProcesses.get(id);
-
-                
-
-                            if (mp != null && mp.logWriter != null) {
-
-                
-
-                                try {
-
-                
-
-                                    // Strip Minecraft color codes for the log file
-
-                
-
-                                    String plain = message.replaceAll("§[0-9a-fk-orA-FK-OR]", "");
-
-                
-
-                                    mp.logWriter.write("[" + new java.text.SimpleDateFormat("HH:mm:ss").format(new java.util.Date()) + "] " + plain + "\n");
-
-                
-
-                                    mp.logWriter.flush();
-
-                
-
-                                } catch (IOException ignored) {}
-
-                
-
-                            }
-
-                
-
-                        }
-
-                
-
-                    
-
-                
-
-                    public void cleanup() {
-
-                        if (!activeProcesses.isEmpty()) {
-
-                            plugin.getLogger().info("Stopping " + activeProcesses.size() + " active shell processes...");
-
-                            activeProcesses.forEach((id, mp) -> {
-
-                                if (mp.process != null) {
-
-                                    mp.process.destroyForcibly();
-
-                                }
-
-                                                if (mp.writer != null) {
-
-                                                    try { mp.writer.close(); } catch (IOException ignored) {}
-
-                                                }
-
-                                                if (mp.logWriter != null) {
-
-                                                    try { mp.logWriter.close(); } catch (IOException ignored) {}
-
-                                                }
-
-                                            });
-
-                                            activeProcesses.clear();
-
-                                
-
-                        }
-
-                    }
-
+                int exitCode = process.waitFor();
+                if (activeProcesses.containsKey(id)) {
+                    sender.sendMessage(msg("warn-prefix") + msg("process-exited", "id", id, "code", exitCode));
+                    activeProcesses.remove(id);
                 }
+            } catch (Exception e) {
+                if (activeProcesses.containsKey(id)) {
+                    sender.sendMessage(msg("error-prefix") + msg("process-error", "id", id, "error", e.getMessage()));
+                    activeProcesses.remove(id);
+                }
+            } finally {
+                if (mp.writer != null) try { mp.writer.close(); } catch (IOException ignored) {}
+                if (mp.logWriter != null) {
+                    try {
+                        mp.logWriter.write("------------------------------------------\nEnd Time: " + new java.util.Date() + "\n");
+                        mp.logWriter.close();
+                    } catch (IOException ignored) {}
+                }
+            }
+        });
+    }
 
-                
+    private void sendFormattedMessage(ConsoleCommandSender sender, String prefixColor, int id, String message) {
+        if (message.isEmpty()) return;
+        sender.sendMessage(prefixColor + "[" + id + "]§r " + message);
+        ManagedProcess mp = activeProcesses.get(id);
+        if (mp != null && mp.logWriter != null) {
+            try {
+                String plain = message.replaceAll("(?i)§[0-9A-FK-ORX]", "").replaceAll("(?i)§[0-9A-F]", "");
+                mp.logWriter.write("[" + new java.text.SimpleDateFormat("HH:mm:ss").format(new java.util.Date()) + "] " + plain + "\n");
+                mp.logWriter.flush();
+            } catch (IOException ignored) {}
+        }
+    }
+
+    public void cleanup() {
+        if (!activeProcesses.isEmpty()) {
+            plugin.getLogger().info("Stopping " + activeProcesses.size() + " active shell processes...");
+            activeProcesses.forEach((id, mp) -> {
+                if (mp.process != null) mp.process.destroyForcibly();
+                if (mp.writer != null) try { mp.writer.close(); } catch (IOException ignored) {}
+                if (mp.logWriter != null) try { mp.logWriter.close(); } catch (IOException ignored) {}
+            });
+            activeProcesses.clear();
+        }
+    }
+}
