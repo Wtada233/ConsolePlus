@@ -72,10 +72,17 @@
 
     <repositories>
         <repository>
-            <id>papermc-repo</id>
-            <url>https://repo.papermc.io/repository/maven-public/</url>
+            <id>embedded-repo</id>
+            <url>file://${project.basedir}/embedded-repo</url>
         </repository>
     </repositories>
+
+    <pluginRepositories>
+        <pluginRepository>
+            <id>embedded-plugin-repo</id>
+            <url>file://${project.basedir}/embedded-repo</url>
+        </pluginRepository>
+    </pluginRepositories>
 
     <dependencies>
         <dependency>
