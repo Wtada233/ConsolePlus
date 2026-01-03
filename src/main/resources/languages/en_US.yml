@@ -24,9 +24,6 @@ process-stats: "§e[MEM: {mem} | CPU: {cpu}]§r"
 stats-na: "§8[Stats N/A]§r"
 
 input-sent: "Input sent to [{id}]."
-lone-cr-detected: "Lone Carriage Return (\r) detected! Terminating."
-incompatible-tty: "Incompatible TTY/Binary detected (code {code})! Terminating."
-trailing-cr-detected: "Trailing Carriage Return (\r) detected! Terminating."
 
 env-created: "Env '{name}' created. Use '/shell env edit {name} <line> <content>' to add settings."
 env-selected: "Default env set to: {name}"

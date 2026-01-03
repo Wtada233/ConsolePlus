@@ -24,9 +24,6 @@ process-stats: "§e[内存: {mem} | CPU: {cpu}]§r"
 stats-na: "§8[统计不可用]§r"
 
 input-sent: "已向 [{id}] 发送输入。"
-lone-cr-detected: "检测到孤立的回车符 (\r)！正在终止。"
-incompatible-tty: "检测到不兼容的 TTY/二进制输出 (代码 {code})！正在终止。"
-trailing-cr-detected: "检测到末尾回车符 (\r)！正在终止。"
 
 env-created: "环境 '{name}' 已创建。使用 '/shell env edit {name} <行号> <内容>' 来添加设置。"
 env-selected: "默认环境已设置为: {name}"

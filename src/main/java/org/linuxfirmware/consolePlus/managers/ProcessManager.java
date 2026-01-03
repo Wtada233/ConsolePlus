@@ -137,7 +137,7 @@ public class ProcessManager {
             int maxLineLength = plugin.getConfig().getInt("max-line-length", 16384);
             int bufferSize = plugin.getConfig().getInt("read-buffer-size", 8192);
             int timeout = (customTimeout != null) ? customTimeout : plugin.getConfig().getInt("default-timeout", 0);
-            String idPrefix = plugin.getConfig().getInt("id-prefix-color", 0) + "§8"; // 修复配置获取类型
+            String idPrefix = plugin.getConfig().getString("id-prefix-color", "§8");
 
             try {
                 if (mp.cancelled) return;
@@ -203,6 +203,7 @@ public class ProcessManager {
                                 ansiState = 0; continue;
                             } else if (ansiState == 3) { ansiState = 0; continue; }
                             
+                            // 过滤不可见控制字符/二进制输出
                             if (ub < 32 && ub != 9) continue;
                             
                             dataBuffer.put((byte) ub);
@@ -217,6 +218,7 @@ public class ProcessManager {
                             flushBuffer(dataBuffer, decoder, sender, idPrefix, id, false);
                         }
                     }
+
                     if (dataBuffer.position() > 0) {
                         flushBuffer(dataBuffer, decoder, sender, idPrefix, id, true);
                     }
