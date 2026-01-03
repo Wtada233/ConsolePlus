@@ -1,6 +1,5 @@
 package org.linuxfirmware.consolePlus.managers;
 
-import org.apache.commons.exec.CommandLine;
 import org.bukkit.command.ConsoleCommandSender;
 import org.linuxfirmware.consolePlus.ConsolePlus;
 import org.linuxfirmware.consolePlus.utils.AnsiConverter;
@@ -107,12 +106,21 @@ public class ProcessManager {
             List<String> envLines = envManager.getEnvironment(envName);
             if (envLines != null) {
                 for (String line : envLines) {
-                    if (line.contains("=") && !line.startsWith(" ")) {
-                        String[] kv = line.split("=", 2);
-                        pb.environment().put(kv[0].trim(), kv[1].trim());
-                    } else if (!line.trim().isEmpty()) {
-                        envCommands.add(line.trim());
+                    String trimmed = line.trim();
+                    if (trimmed.isEmpty()) continue;
+
+                    int eqIdx = trimmed.indexOf('=');
+                    if (eqIdx > 0) {
+                        String key = trimmed.substring(0, eqIdx).trim();
+                        String value = trimmed.substring(eqIdx + 1).trim();
+                        // 如果键合法（不含空格）且不是 export/set 命令，则直接注入环境变量
+                        if (!key.contains(" ") && !key.equalsIgnoreCase("export") && !key.equalsIgnoreCase("set")) {
+                            pb.environment().put(key, value);
+                            continue;
+                        }
                     }
+                    // 否则作为预执行命令处理
+                    envCommands.add(trimmed);
                 }
             }
             
@@ -129,10 +137,15 @@ public class ProcessManager {
             int maxLineLength = plugin.getConfig().getInt("max-line-length", 16384);
             int bufferSize = plugin.getConfig().getInt("read-buffer-size", 8192);
             int timeout = (customTimeout != null) ? customTimeout : plugin.getConfig().getInt("default-timeout", 0);
-            String idPrefix = plugin.getConfig().getString("id-prefix-color", "§8");
-            
+            String idPrefix = plugin.getConfig().getInt("id-prefix-color", 0) + "§8"; // 修复配置获取类型
+
             try {
+                if (mp.cancelled) return;
                 Process process = pb.start();
+                if (mp.cancelled) {
+                    process.destroyForcibly();
+                    return;
+                }
                 mp.updateProcess(process, charset);
                 
                 if (timeout > 0) {
@@ -160,6 +173,14 @@ public class ProcessManager {
                     while ((bytesRead = is.read(rawBuffer)) != -1) {
                         for (int k = 0; k < bytesRead; k++) {
                             int ub = rawBuffer[k] & 0xFF;
+                            
+                            // 忽略回车符，仅在换行符时刷新缓冲区
+                            if (ub == 13) continue;
+                            if (ub == 10) {
+                                flushBuffer(dataBuffer, decoder, sender, idPrefix, id, false);
+                                continue;
+                            }
+
                             if (ansiState == 0) {
                                 if (ub == 27) { ansiState = 1; continue; }
                             } else if (ansiState == 1) {
@@ -182,11 +203,6 @@ public class ProcessManager {
                                 ansiState = 0; continue;
                             } else if (ansiState == 3) { ansiState = 0; continue; }
                             
-                            if (ub == 10 || ub == 13) {
-                                flushBuffer(dataBuffer, decoder, sender, idPrefix, id, false);
-                                continue;
-                            }
-                            
                             if (ub < 32 && ub != 9) continue;
                             
                             dataBuffer.put((byte) ub);
@@ -201,7 +217,6 @@ public class ProcessManager {
                             flushBuffer(dataBuffer, decoder, sender, idPrefix, id, false);
                         }
                     }
-                    // Final flush to handle any remaining bytes
                     if (dataBuffer.position() > 0) {
                         flushBuffer(dataBuffer, decoder, sender, idPrefix, id, true);
                     }
@@ -240,7 +255,7 @@ public class ProcessManager {
 
     private void flushBuffer(ByteBuffer buffer, CharsetDecoder decoder, ConsoleCommandSender sender, String idPrefix, int id, boolean endOfInput) {
         buffer.flip();
-        CharBuffer chars = CharBuffer.allocate(buffer.remaining() + (endOfInput ? 10 : 0)); // Extra space for potential flush
+        CharBuffer chars = CharBuffer.allocate(buffer.remaining() + (endOfInput ? 10 : 0));
         CoderResult result = decoder.decode(buffer, chars, endOfInput);
         
         if (endOfInput && result.isUnderflow()) {
@@ -249,9 +264,7 @@ public class ProcessManager {
         
         chars.flip();
         String line = chars.toString();
-        if (!line.isEmpty()) {
-            sendFormattedMessage(sender, idPrefix, id, line);
-        }
+        sendFormattedMessage(sender, idPrefix, id, line);
         
         if (buffer.hasRemaining()) {
             buffer.compact();
@@ -261,7 +274,7 @@ public class ProcessManager {
     }
 
     private void sendFormattedMessage(ConsoleCommandSender sender, String prefixColor, int id, String message) {
-        if (message.isEmpty()) return;
+        // 允许发送空行，确保 echo 等命令的空结果可见
         sender.sendMessage(prefixColor + "[" + id + "]§r " + message);
         ManagedProcess mp = activeProcesses.get(id);
         if (mp != null && mp.logWriter != null) {
@@ -276,6 +289,7 @@ public class ProcessManager {
     public boolean stopProcess(int id) {
         ManagedProcess mp = activeProcesses.remove(id);
         if (mp != null) {
+            mp.cancelled = true;
             if (mp.process != null) {
                 mp.process.toHandle().descendants().forEach(ProcessHandle::destroyForcibly);
                 mp.process.destroyForcibly();
@@ -368,15 +382,14 @@ public class ProcessManager {
                                 try (java.util.Scanner s = new java.util.Scanner(p.getInputStream(), getNativeCharset())) {
                                     while (s.hasNextLine()) {
                                         String line = s.nextLine();
-                                        if (line.contains(",")) {
-                                            String[] parts = line.replace("\"", "").split(",");
-                                            if (parts.length >= 5) {
-                                                try {
-                                                    long pId = Long.parseLong(parts[1]);
-                                                    long mem = Long.parseLong(parts[4].replaceAll("[^0-9]", ""));
-                                                    newStats.put(pId, mem);
-                                                } catch (NumberFormatException ignored) {}
-                                            }
+                                        List<String> parts = org.linuxfirmware.consolePlus.vendor.RobustCsvParser.parseLine(line);
+                                        if (parts.size() >= 5) {
+                                            try {
+                                                long pId = Long.parseLong(parts.get(1));
+                                                // 稳健提取内存数值，忽略非数字字符
+                                                long mem = Long.parseLong(parts.get(4).replaceAll("[^0-9]", ""));
+                                                newStats.put(pId, mem);
+                                            } catch (NumberFormatException ignored) {}
                                         }
                                     }
                                 }
@@ -422,6 +435,7 @@ public class ProcessManager {
         long lastSampleTime = 0;
         long lastCpuNanos = 0;
         double lastUsage = 0.0;
+        volatile boolean cancelled = false;
 
         ManagedProcess(Process process, String command, Charset charset) {
             this.process = process;

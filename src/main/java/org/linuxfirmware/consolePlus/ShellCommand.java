@@ -249,37 +249,32 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
 
     private void handleRun(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage(msg("error-prefix") + "Usage: /shell run [-d dir] [-e env] [-t timeout] <command>");
+            sender.sendMessage(msg("error-prefix") + "用法: /shell run [-d 目录] [-e 环境] [-t 超时] <命令>");
             return;
         }
-        String workDir = null;
-        String envName = selectedEnv;
-        Integer customTimeout = null;
-        int i = 1;
-        while (i < args.length) {
-            if (args[i].equals("-d") && i + 1 < args.length) { workDir = args[i + 1]; i += 2; }
-            else if (args[i].equals("-e") && i + 1 < args.length) { envName = args[i + 1]; i += 2; }
-            else if (args[i].equals("-t") && i + 1 < args.length) {
-                try {
-                    customTimeout = Integer.parseInt(args[i + 1]);
-                } catch (NumberFormatException e) {
-                    sender.sendMessage(msg("error-prefix") + msg("invalid-timeout"));
-                    return;
-                }
-                i += 2;
-            } else break;
-        }
-        if (i >= args.length) {
+
+        // 使用单文件库解析命令行标志
+        org.linuxfirmware.consolePlus.vendor.SimpleArgParser parser = new org.linuxfirmware.consolePlus.vendor.SimpleArgParser();
+        parser.parse(args, 1);
+
+        String workDir = parser.getFlag("-d", null);
+        String envName = parser.getFlag("-e", selectedEnv);
+        Integer customTimeout = parser.getIntFlag("-t");
+        int cmdIndex = parser.getRemainingIndex();
+
+        if (cmdIndex >= args.length) {
             sender.sendMessage(msg("error-prefix") + msg("no-command-specified"));
             return;
         }
+
         if (envName != null && !envManager.exists(envName)) {
             sender.sendMessage(msg("warn-prefix") + msg("env-fallback", "name", envName));
             envName = "default";
         }
         if (envName == null) envName = "default";
         
-        String commandString = ShellUtils.buildCommand(args, i);
+        // 构建最终执行的命令字符串
+        String commandString = ShellUtils.buildCommand(args, cmdIndex);
         processManager.executeAsync(commandString, (ConsoleCommandSender) sender, workDir, envName, customTimeout);
     }
 
