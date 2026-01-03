@@ -44,10 +44,6 @@ public class ProcessManager {
         return plugin.getI18n().get(key);
     }
     
-    private String msg(String key, Map<String, Object> map) {
-        return plugin.getI18n().get(key, map);
-    }
-    
     private String msg(String key, String p1, Object v1) {
         Map<String, Object> map = new HashMap<>();
         map.put(p1, v1);
@@ -58,14 +54,6 @@ public class ProcessManager {
         Map<String, Object> map = new HashMap<>();
         map.put(p1, v1);
         map.put(p2, v2);
-        return plugin.getI18n().get(key, map);
-    }
-
-    private String msg(String key, String p1, Object v1, String p2, Object v2, String p3, Object v3) {
-        Map<String, Object> map = new HashMap<>();
-        map.put(p1, v1);
-        map.put(p2, v2);
-        map.put(p3, v3);
         return plugin.getI18n().get(key, map);
     }
 
@@ -90,7 +78,7 @@ public class ProcessManager {
                 String timestamp = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss").format(new java.util.Date());
                 File logFile = new File(logDir, "process-" + id + "-" + timestamp + ".log");
                 mp.logWriter = new BufferedWriter(new OutputStreamWriter(new java.io.FileOutputStream(logFile), StandardCharsets.UTF_8));
-                mp.logWriter.write("Command: " + cmd + "\nStart Time: " + new java.util.Date() + "\n------------------------------------------\n");
+                mp.logWriter.write(msg("log-header-cmd") + cmd + "\n" + msg("log-header-start") + new java.util.Date() + "\n------------------------------------------\n");
                 mp.logWriter.flush();
             } catch (IOException e) { plugin.getLogger().warning("Could not create log file for process " + id + ": " + e.getMessage()); }
         }
@@ -210,7 +198,7 @@ public class ProcessManager {
                             
                             if (dataBuffer.position() > maxLineLength) {
                                 flushBuffer(dataBuffer, decoder, sender, idPrefix, id, false);
-                                sender.sendMessage(idPrefix + "[" + id + "]§r §7(line truncated...)");
+                                sender.sendMessage(idPrefix + "[" + id + "]§r §7" + msg("line-truncated"));
                             }
                         }
                         
@@ -234,7 +222,7 @@ public class ProcessManager {
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     if (activeProcesses.containsKey(id)) {
-                        sender.sendMessage(msg("error-prefix") + msg("process-error", "id", id, "error", "Process interrupted"));
+                        sender.sendMessage(msg("error-prefix") + msg("process-error", "id", id, "error", msg("process-stopped", "id", id)));
                         activeProcesses.remove(id);
                     }
                 }
@@ -247,7 +235,7 @@ public class ProcessManager {
                 if (mp.writer != null) try { mp.writer.close(); } catch (IOException ignored) {}
                 if (mp.logWriter != null) {
                     try {
-                        mp.logWriter.write("------------------------------------------\nEnd Time: " + new java.util.Date() + "\n");
+                        mp.logWriter.write("------------------------------------------\n" + msg("log-header-end") + new java.util.Date() + "\n");
                         mp.logWriter.close();
                     } catch (IOException ignored) {}
                 }
@@ -332,7 +320,7 @@ public class ProcessManager {
     
     public void cleanup() {
         if (!activeProcesses.isEmpty()) {
-            plugin.getLogger().info("Stopping " + activeProcesses.size() + " active shell processes...");
+            plugin.getLogger().info(msg("stopping-processes", "count", activeProcesses.size()));
             activeProcesses.forEach((id, mp) -> {
                 if (mp.process != null) mp.process.destroyForcibly();
                 if (mp.writer != null) try { mp.writer.close(); } catch (IOException ignored) {}

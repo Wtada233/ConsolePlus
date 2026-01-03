@@ -249,7 +249,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
 
     private void handleRun(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage(msg("error-prefix") + "用法: /shell run [-d 目录] [-e 环境] [-t 超时] <命令>");
+            sender.sendMessage(msg("error-prefix") + msg("run-usage"));
             return;
         }
 
@@ -280,7 +280,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
 
     private void handleStop(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage(msg("error-prefix") + "Usage: /shell stop <id>");
+            sender.sendMessage(msg("error-prefix") + msg("stop-usage"));
             return;
         }
         try {
@@ -295,7 +295,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
 
     private void handleInput(CommandSender sender, String[] args) {
         if (args.length < 3) {
-            sender.sendMessage(msg("error-prefix") + "Usage: /shell input <id> <text>");
+            sender.sendMessage(msg("error-prefix") + msg("input-usage"));
             return;
         }
         try {
@@ -312,19 +312,19 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
 
     private void handleEnv(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage(msg("prefix") + "Env Usage: /shell env <create|select|delete|edit|list>");
+            sender.sendMessage(msg("prefix") + msg("env-usage"));
             return;
         }
         String action = args[1].toLowerCase();
         switch (action) {
             case "create":
-                if (args.length < 3) { sender.sendMessage(msg("error-prefix") + "/shell env create <name>"); return; }
+                if (args.length < 3) { sender.sendMessage(msg("error-prefix") + msg("env-create-usage")); return; }
                 if (args[2].equalsIgnoreCase("default")) { sender.sendMessage(msg("error-prefix") + msg("env-reserved")); return; }
                 envManager.createEnvironment(args[2]);
                 sender.sendMessage(msg("prefix") + msg("env-created", "name", args[2]));
                 break;
             case "select":
-                if (args.length < 3) { sender.sendMessage(msg("error-prefix") + "/shell env select <name>"); return; }
+                if (args.length < 3) { sender.sendMessage(msg("error-prefix") + msg("env-select-usage")); return; }
                 if (!envManager.exists(args[2])) {
                     sender.sendMessage(msg("warn-prefix") + msg("env-fallback", "name", args[2]));
                     selectedEnv = "default";
@@ -334,7 +334,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                 }
                 break;
             case "delete":
-                if (args.length < 3) { sender.sendMessage(msg("error-prefix") + "/shell env delete <name>"); return; }
+                if (args.length < 3) { sender.sendMessage(msg("error-prefix") + msg("env-delete-usage")); return; }
                 if (args[2].equalsIgnoreCase("default")) { sender.sendMessage(msg("error-prefix") + msg("env-delete-default")); return; }
                 envManager.deleteEnvironment(args[2]);
                 if (args[2].equals(selectedEnv)) {
@@ -348,7 +348,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                     sender.sendMessage(msg("prefix") + msg("list-env-header"));
                     envManager.getEnvironments().forEach((name, lines) -> {
                         String prefix = name.equals(selectedEnv) ? "§6* " : "§f- ";
-                        sender.sendMessage(prefix + name + " §7(" + lines.size() + " lines)");
+                        sender.sendMessage(prefix + name + " §7" + msg("lines-count", "count", lines.size()));
                     });
                     sender.sendMessage(msg("list-env-usage"));
                 } else {
@@ -362,7 +362,7 @@ public class ShellCommand implements CommandExecutor, TabCompleter {
                 }
                 break;
             case "edit":
-                if (args.length < 4) { sender.sendMessage(msg("error-prefix") + "/shell env edit <name> <line> <content|EOF>"); return; }
+                if (args.length < 4) { sender.sendMessage(msg("error-prefix") + msg("env-edit-usage")); return; }
                 if (args[2].equalsIgnoreCase("default")) { sender.sendMessage(msg("error-prefix") + msg("env-edit-default")); return; }
                 List<String> lines = envManager.getEnvironment(args[2]);
                 if (lines == null) { sender.sendMessage(msg("error-prefix") + msg("env-not-found")); return; }

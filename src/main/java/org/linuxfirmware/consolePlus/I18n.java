@@ -61,7 +61,14 @@ public class I18n {
     public String get(String key) {
         return cache.computeIfAbsent(key, k -> {
             String val = langConfig.getString(k);
-            return val != null ? val.replace("&", "§") : "Missing key: " + k;
+            if (val != null) return val.replace("&", "§");
+            
+            // Avoid infinite recursion if missing-key itself is missing
+            if (k.equals("missing-key")) return "Missing key: " + k;
+            
+            Map<String, Object> map = new HashMap<>();
+            map.put("key", k);
+            return get("missing-key", map);
         });
     }
 
